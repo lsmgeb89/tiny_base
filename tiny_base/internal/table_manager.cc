@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <cstring>
+#include <cassert>
+#include <iostream>
 
 #include "endian_util.h"
 #include "page_format.h"
@@ -11,13 +13,15 @@ TableManager::TableManager(const fs::path& file_path)
     : file_path_(file_path),
       root_page_(0),
       page_num_(0),
-      fanout_(0),
+      fanout_(std::numeric_limits<decltype(fanout_)>::max()),
       table_file_(std::make_shared<utils::FileUtil>(file_path_)) {}
 
 TableManager::~TableManager(void) {}
 
 void TableManager::Load(const TableSchema& schema) {
   table_schema_ = schema;
+  // TODO: fanout and root page
+  // TODO: traverse to set parent
   LoadPage();
 }
 
@@ -29,16 +33,23 @@ void TableManager::CreateTable(const sql::CreateTableCommand& command) {
   // save schema
   table_schema_ = command;
 
+  // create
   fs::create_directories(file_path_.parent_path());
-
   table_file_->CreateFile();
-
   CreatePage(TableLeafCell);
 }
 
 void TableManager::InsertInto(const sql::InsertIntoCommand& command) {
-  // key
-  InsertRecord(GetPrimaryKey(command), PrepareRecord(command));
+  CellKey pri_key(GetPrimaryKey(command));
+  PageIndex target_page(SearchPage(root_page_, pri_key));
+  PageCell cell(PrepareLeafCell(command));
+
+  if ((fanout_ == std::numeric_limits<decltype(fanout_)>::max()) &&
+      !HasSpace(target_page, cell.size())) {
+    UpdateFanout(target_page);
+  }
+
+  InsertCell(target_page, pri_key, cell, nullptr);
 }
 
 PrimaryKey TableManager::GetPrimaryKey(const sql::InsertIntoCommand& command) {
@@ -47,25 +58,36 @@ PrimaryKey TableManager::GetPrimaryKey(const sql::InsertIntoCommand& command) {
   return primary_key;
 }
 
-PageRecord TableManager::PrepareRecord(const sql::InsertIntoCommand& command) {
-  std::size_t offset(0);
+PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
+  std::size_t offset(table_leaf_rowid_offset);
   std::size_t type_size(0);
-  PageRecord tiny_tables_record;
+  int16_t payload_size(0);
+  PrimaryKey primary_key(0);
+  PageCell table_leaf_cell;
 
   if (table_schema_.column_list.size() != command.value_list.size()) {
     // TODO: error handling
   }
 
+  primary_key = GetPrimaryKey(command);
+  primary_key = utils::SwapEndian<decltype(primary_key)>(primary_key);
+
+  // copy rowid
+  table_leaf_cell.resize(table_leaf_rowid_offset + table_leaf_rowid_length);
+  std::memcpy(table_leaf_cell.data() + offset, &primary_key,
+              table_leaf_rowid_length);
+  offset += table_leaf_rowid_length;
+
   for (auto i = 0; i < table_schema_.column_list.size(); i++) {
     if (table_schema_.column_list[i].type != sql::Text) {
       type_size = sql::DataTypeSize[table_schema_.column_list[i].type];
-      tiny_tables_record.resize(tiny_tables_record.size() + type_size);
+      table_leaf_cell.resize(table_leaf_cell.size() + type_size);
     }
 
     switch (table_schema_.column_list[i].type) {
       case sql::OneByteNull:
       case sql::TinyInt:
-        tiny_tables_record[offset] =
+        table_leaf_cell[offset] =
             std::experimental::any_cast<int8_t>(command.value_list[i]);
         break;
       case sql::TwoByteNull:
@@ -73,21 +95,21 @@ PageRecord TableManager::PrepareRecord(const sql::InsertIntoCommand& command) {
         int16_t value_16 =
             std::experimental::any_cast<int16_t>(command.value_list[i]);
         value_16 = utils::SwapEndian<decltype(value_16)>(value_16);
-        std::memcpy(tiny_tables_record.data() + offset, &value_16, type_size);
+        std::memcpy(table_leaf_cell.data() + offset, &value_16, type_size);
       } break;
       case sql::FourByteNull:
       case sql::Int: {
         int32_t value_32 =
             std::experimental::any_cast<int32_t>(command.value_list[i]);
         value_32 = utils::SwapEndian<decltype(value_32)>(value_32);
-        std::memcpy(tiny_tables_record.data() + offset, &value_32, type_size);
+        std::memcpy(table_leaf_cell.data() + offset, &value_32, type_size);
       } break;
       case sql::EightByteNull:
       case sql::BigInt: {
         int64_t value_64 =
             std::experimental::any_cast<int64_t>(command.value_list[i]);
         value_64 = utils::SwapEndian<decltype(value_64)>(value_64);
-        std::memcpy(tiny_tables_record.data() + offset, &value_64, type_size);
+        std::memcpy(table_leaf_cell.data() + offset, &value_64, type_size);
       } break;
       case sql::Real:
       case sql::Double:
@@ -99,10 +121,10 @@ PageRecord TableManager::PrepareRecord(const sql::InsertIntoCommand& command) {
         std::string value_str =
             std::experimental::any_cast<std::string>(command.value_list[i]);
         type_size = value_str.size();
-        tiny_tables_record.resize(tiny_tables_record.size() + type_size);
+        table_leaf_cell.resize(table_leaf_cell.size() + type_size);
         std::reverse(value_str.begin(), value_str.end());
         std::copy(value_str.begin(), value_str.end(),
-                  tiny_tables_record.data() + offset);
+                  table_leaf_cell.data() + offset);
       } break;
       default:
         break;
@@ -110,26 +132,79 @@ PageRecord TableManager::PrepareRecord(const sql::InsertIntoCommand& command) {
 
     offset += type_size;
   }
-  return tiny_tables_record;
+
+  payload_size = table_leaf_cell.size() - table_leaf_payload_offset;
+  payload_size = utils::SwapEndian<decltype(payload_size)>(payload_size);
+  std::memcpy(table_leaf_cell.data() + table_leaf_payload_length_offset,
+              &payload_size, table_leaf_payload_length_length);
+
+  return table_leaf_cell;
 }
 
-void TableManager::InsertRecord(const PrimaryKey& primary_key,
-                                const PageRecord& record) {
-  PageIndex target_page = SearchPage(root_page_, primary_key);
+PageCell TableManager::PrepareInteriorCell(const int32_t& left_pointer,
+                                           const int32_t& key) {
+  int32_t value_32(0);
+  PageCell cell;
+  cell.resize(table_interior_cell_length);
 
-  if (!fanout_) {
-    if (HasSpace(target_page, record.size())) {
-      InsertRecord_(target_page, primary_key, record);
+  value_32 = utils::SwapEndian<int32_t>(left_pointer);
+  std::memcpy(cell.data() + table_interior_left_pointer_offset, &value_32,
+              table_interior_left_pointer_length);
+
+  value_32 = utils::SwapEndian<int32_t>(key);
+  std::memcpy(cell.data() + table_interior_key_offset, &value_32,
+              table_interior_key_length);
+
+  return cell;
+}
+
+void TableManager::InsertCell(const PageIndex& target_page,
+                              const PrimaryKey& primary_key,
+                              const PageCell& cell,
+                              std::shared_ptr<PageIndex> right_most_pointer) {
+  if (WillOverflow(target_page)) {
+    PageIndex parent_page(0);
+    PageIndex left_child_page(0);
+    std::shared_ptr<PageIndex> right_child_page(std::make_shared<PageIndex>(0));
+    CellPivot cell_pivot(GetCellPivot(target_page, primary_key));
+
+    // right split
+    PageIndex new_page(0);
+    if (IsLeaf(target_page)) {
+      new_page = SplitLeafPage(target_page, cell_pivot.first);
     } else {
-      UpdateFanout(target_page);
-      // split
+      new_page = SplitInteriorPage(target_page, cell_pivot, primary_key,
+                                   right_most_pointer);
     }
-  } else if (IsRoot(target_page)) {
-    // split
-  } else if (IsOverflow(target_page) || !HasSpace(target_page, record.size())) {
-    // split
+
+    // insert this cell
+    DoInsertCell(new_page, primary_key, cell);
+
+    if (IsRoot(target_page)) {
+      parent_page = CreatePage(TableInteriorCell);
+      // update root page
+      root_page_ = parent_page;
+    } else {
+      parent_page = GetParent(target_page);
+    }
+
+    // for parent
+    left_child_page = target_page;
+    *right_child_page = new_page;
+
+    // update parent
+    SetParent(left_child_page, parent_page);
+    SetParent(*right_child_page, parent_page);
+
+    // bottom up recursion
+    InsertCell(parent_page, cell_pivot.second,
+               PrepareInteriorCell(left_child_page, cell_pivot.second),
+               right_child_page);
   } else {
-    InsertRecord_(target_page, primary_key, record);
+    if (right_most_pointer) {
+      SetRightMostPointer(target_page, *right_most_pointer);
+    }
+    DoInsertCell(target_page, primary_key, cell);
   }
 }
 
@@ -152,18 +227,20 @@ PageIndex TableManager::SearchPage(const PageIndex& current_page,
   }
 }
 
-void TableManager::CreatePage(const PageType& page_type) {
+PageIndex TableManager::CreatePage(const PageType& page_type) {
   page_list_.emplace_back(table_file_, page_list_.size() * page_size);
-  page_list_.back().SetPageType(TableLeafCell);
+  page_list_.back().SetPageType(page_type);
+  page_list_.back().Clear();
   page_list_.back().UpdateInfo();
+  return (page_list_.size() - 1);
 }
 
 void TableManager::LoadPage(void) {
   utils::FileSize size = table_file_->GetFileSize();
-  // TODO: all should be multiple page_size
-  if (size % page_size) {
-    return;
-  }
+
+  // TODO: change assert to exception
+  assert(size % page_size == 0);
+
   page_num_ = size / page_size;
   for (auto i = 0; i < page_num_; i++) {
     page_list_.emplace_back(table_file_, i * page_size);
@@ -171,8 +248,122 @@ void TableManager::LoadPage(void) {
   }
 }
 
-bool TableManager::IsOverflow(const PageIndex& page_index) const {
-  return (page_list_[page_index].GetCellNum() + 1 <= fanout_);
+PageIndex TableManager::SplitInteriorPage(
+    const PageIndex& target_page, const CellPivot& cell_pivot,
+    const PrimaryKey& primary_key,
+    std::shared_ptr<PageIndex> right_most_pointer) {
+  assert(page_list_[target_page].GetPageType() == TableInteriorCell);
+  // create a new page
+  PageIndex new_page(CreatePage(TableInteriorCell));
+  auto iter_target = page_list_.begin() + target_page;
+  uint8_t target_cell_num(iter_target->GetCellNum());
+  CellKeyRange target_key_range(iter_target->GetCellKeyRange());
+  CellIndex copy_index(0);
+  CellIndex delete_index(0);
+
+  // up key is in the target
+  if (primary_key != cell_pivot.second) {
+    delete_index = cell_pivot.first;
+    copy_index = delete_index + 1;
+  } else {
+    delete_index = cell_pivot.first;
+    copy_index = delete_index;
+  }
+
+  // update pointers
+  if (primary_key > target_key_range.second) {
+    // lower level right most split to target
+    SetRightMostPointer(new_page, *right_most_pointer);
+
+    // use up key's left pointer as target right pointer
+    SetRightMostPointer(target_page,
+                        iter_target->GetCellLeftPointer(delete_index));
+
+  } else if (primary_key < target_key_range.first) {
+    // lower level left most split to target
+    SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+
+    // first key's left pointer
+    iter_target->SetCellLeftPointer(0, *right_most_pointer);
+
+    // use up key's left pointer as target right pointer
+    SetRightMostPointer(target_page,
+                        iter_target->GetCellLeftPointer(delete_index));
+
+  } else if (GetCellKey(target_page, delete_index - 1) < primary_key &&
+             primary_key < cell_pivot.second) {
+    // primary key is just left to pivot
+    SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+
+    SetRightMostPointer(target_page, *right_most_pointer);
+
+  } else if (primary_key > cell_pivot.second &&
+             primary_key < GetCellKey(target_page, delete_index + 1)) {
+    // primary key is just right to pivot
+    SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+
+    iter_target->SetCellLeftPointer(delete_index + 1, *right_most_pointer);
+
+    SetRightMostPointer(target_page,
+                        iter_target->GetCellLeftPointer(delete_index));
+
+  } else if (primary_key == cell_pivot.second) {
+    // primary key is pivot
+    SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+
+    SetRightMostPointer(target_page,
+                        iter_target->GetCellLeftPointer(delete_index));
+
+    iter_target->SetCellLeftPointer(delete_index, *right_most_pointer);
+  } else {
+    std::cerr << "not support" << std::endl;
+  }
+
+  // copy cells into new page
+  for (auto i = copy_index; i < target_cell_num; i++) {
+    DoInsertCell(new_page, iter_target->GetCellKey(i), iter_target->GetCell(i));
+  }
+
+  // always this index because of vector
+  for (auto j = delete_index; j < target_cell_num; j++) {
+    iter_target->DeleteCell(delete_index);
+  }
+
+  // update changes
+  iter_target->UpdateInfo();
+
+  return new_page;
+}
+
+PageIndex TableManager::SplitLeafPage(const PageIndex& target_page,
+                                      const CellIndex& cell_index) {
+  assert(page_list_[target_page].GetPageType() == TableLeafCell);
+
+  PageIndex new_page(CreatePage(TableLeafCell));
+  auto iter_target = page_list_.begin() + target_page;
+  uint8_t target_cell_num(iter_target->GetCellNum());
+
+  // move cells into new page (fix index because of vector)
+  for (auto i = cell_index; i < target_cell_num; i++) {
+    DoInsertCell(new_page, iter_target->GetCellKey(cell_index),
+                 iter_target->GetCell(cell_index));
+    iter_target->DeleteCell(cell_index);
+  }
+
+  iter_target->SetPageRightMostPointer(new_page);
+
+  // update changes
+  iter_target->UpdateInfo();
+
+  return new_page;
+}
+
+PageIndex TableManager::GetParent(const PageIndex& page_index) {
+  return (page_list_[page_index].GetParent());
+}
+
+bool TableManager::WillOverflow(const PageIndex& page_index) const {
+  return (page_list_[page_index].GetCellNum() + 1 > fanout_ - 1);
 }
 
 void TableManager::UpdateFanout(const PageIndex& page_index) {
@@ -182,28 +373,29 @@ void TableManager::UpdateFanout(const PageIndex& page_index) {
   fanout_ = static_cast<uint8_t>(page_list_[page_index].GetCellNum() + 1);
 }
 
-void TableManager::InsertRecord_(const PageIndex& page_index,
-                                 const PrimaryKey& primary_key,
-                                 const PageRecord& record) {
-  PageManager& page(page_list_[page_index]);
-  auto cell_num = page.GetCellNum();
-  if (!cell_num) {
-    page.InsertRecord(0, record);
-  } else {
-    CellKeyRange key_range = page.GetCellKeyRange();
-    if (primary_key < key_range.first) {
-      page.InsertRecord(0, record);
-    } else if (primary_key > key_range.second) {
-      page.InsertRecord(cell_num, record);
-    } else {
-      for (auto i = 1; i < cell_num; i++) {
-        if (primary_key < page.GetCellKey(i)) {
-          page.InsertRecord(i, record);
-          break;
-        }
-      }
-    }
-  }
+void TableManager::DoInsertCell(const PageIndex& page_index,
+                                const PrimaryKey& primary_key,
+                                const PageCell& cell) {
+  page_list_[page_index].InsertCell(primary_key, cell);
+}
+
+CellPivot TableManager::GetCellPivot(const PageIndex& page_index,
+                                     const CellKey& cell_key) {
+  CellPivot pivot;
+
+  std::set<CellKey> key_set(page_list_[page_index].GetCellKeySet());
+  key_set.insert(cell_key);
+
+  // range constructor
+  std::vector<CellKey> key_list(key_set.begin(), key_set.end());
+  pivot.second = key_list[key_list.size() / 2];
+
+  key_set.erase(cell_key);
+  // first element that is not less than pivot
+  pivot.first =
+      std::distance(key_set.begin(), key_set.lower_bound(pivot.second));
+
+  return pivot;
 }
 
 }  // namespace internal

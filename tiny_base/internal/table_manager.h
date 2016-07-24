@@ -11,6 +11,7 @@
 namespace internal {
 
 using PrimaryKey = CellKey;
+using CellPivot = std::pair<CellIndex, CellKey>;
 using TableSchema = sql::CreateTableCommand;
 
 class TableManager {
@@ -46,30 +47,62 @@ class TableManager {
   TableSchema table_schema_;
 
   // page
-  void CreatePage(const PageType& page_type);
+  PageIndex CreatePage(const PageType& page_type);
 
   void LoadPage(void);
+
+  PageIndex SplitLeafPage(const PageIndex& target_page,
+                          const CellIndex& cell_index);
+
+  PageIndex SplitInteriorPage(const PageIndex& target_page,
+                              const CellPivot& cell_pivot,
+                              const PrimaryKey& primary_key,
+                              std::shared_ptr<PageIndex> right_most_pointer);
 
   // TODO: considering merge them into command class (abstract class)
   PrimaryKey GetPrimaryKey(const sql::InsertIntoCommand& command);
 
-  PageRecord PrepareRecord(const sql::InsertIntoCommand& command);
+  // for leaf pages
+  PageCell PrepareLeafCell(const sql::InsertIntoCommand& command);
+
+  // for interior pages
+  PageCell PrepareInteriorCell(const int32_t& left_pointer, const int32_t& key);
 
   // B Plus Tree
-  void InsertRecord(const PrimaryKey& primary_key, const PageRecord& record);
+  void InsertCell(const PageIndex& target_page, const PrimaryKey& primary_key,
+                  const PageCell& cell,
+                  std::shared_ptr<PageIndex> right_most_pointer);
 
-  void InsertRecord_(const PageIndex& page_index, const PrimaryKey& primary_key,
-                     const PageRecord& record);
+  void DoInsertCell(const PageIndex& page_index, const PrimaryKey& primary_key,
+                    const PageCell& cell);
 
   PageIndex SearchPage(const PageIndex& current_page,
                        const PrimaryKey& primary_key);
 
   void UpdateFanout(const PageIndex& page_index);
 
-  bool IsOverflow(const PageIndex& page_index) const;
+  bool WillOverflow(const PageIndex& page_index) const;
 
   bool IsRoot(const PageIndex& page_index) const {
     return (page_index == root_page_);
+  }
+
+  // wrappers
+  CellPivot GetCellPivot(const PageIndex& page_index, const CellKey& cell_key);
+
+  PageIndex GetParent(const PageIndex& page_index);
+
+  CellKey GetCellKey(const PageIndex& page_index, const CellIndex& cell_index) {
+    return page_list_[page_index].GetCellKey(cell_index);
+  }
+
+  PagePointer GetRightMostPointer(const PageIndex& page_index) {
+    return page_list_[page_index].GetRightMostPagePointer();
+  }
+
+  void SetRightMostPointer(const PageIndex& page_index,
+                           const PagePointer& right_most_pointer) {
+    return page_list_[page_index].SetPageRightMostPointer(right_most_pointer);
   }
 
   bool IsLeaf(const PageIndex& page_index) const {
@@ -77,8 +110,12 @@ class TableManager {
   }
 
   bool HasSpace(const PageIndex& page_index,
-                const utils::FileOffset& record_size) const {
-    return page_list_[page_index].HasSpace(record_size);
+                const utils::FileOffset cell_size) const {
+    return page_list_[page_index].HasSpace(cell_size);
+  }
+
+  void SetParent(const PageIndex& page_index, const PageIndex& parent_index) {
+    return page_list_[page_index].SetParent(parent_index);
   }
 };
 

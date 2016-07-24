@@ -1,16 +1,19 @@
 #ifndef TINY_BASE_PAGE_MANAGER_H_
 #define TINY_BASE_PAGE_MANAGER_H_
 
+#include <set>
 #include <vector>
 #include <utility>
 #include "file_util.h"
 
 namespace internal {
 
+using CellIndex = uint32_t;
 using CellKey = int32_t;
 using CellKeyRange = std::pair<CellKey, CellKey>;
 using PageIndex = uint32_t;
-using PageRecord = std::vector<char>;
+using PagePointer = PageIndex;
+using PageCell = std::vector<char>;
 
 enum PageType {
   InvalidCell = 0x00,
@@ -33,22 +36,45 @@ class PageManager {
   // Getter
   uint8_t GetCellNum(void) const { return cell_num_; }
 
+  PageType GetPageType(void) const { return page_type_; }
+
   CellKeyRange GetCellKeyRange(void);
 
-  CellKey GetCellKey(const uint8_t& cell_index);
+  std::set<CellKey> GetCellKeySet(void) { return key_set_; }
+
+  CellKey GetCellKey(const CellIndex& cell_index);
+
+  PageCell GetCell(const CellIndex& cell_index);
+
+  PageIndex GetParent(void) { return parent_; }
 
   PageIndex GetLeftMostPagePointer(void);
 
   PageIndex GetRightMostPagePointer(void) { return right_most_pointer_; }
 
+  PagePointer GetCellLeftPointer(const CellIndex& cell_index);
+
   // Setter
   void SetPageType(const PageType& page_type) { page_type_ = page_type; }
 
-  bool IsLeaf(void) const { return (page_type_ | 0x08); }
+  void SetParent(const PageIndex& parent_index) { parent_ = parent_index; }
 
-  bool HasSpace(const utils::FileOffset& record_size) const;
+  void SetPageRightMostPointer(const uint32_t& right_most_pointer) {
+    right_most_pointer_ = right_most_pointer;
+  }
 
-  void InsertRecord(const uint8_t& cell_index, const PageRecord& record);
+  void SetCellLeftPointer(const CellIndex& cell_index,
+                          const PagePointer& left_pointer);
+
+  bool IsLeaf(void) const { return (TableLeafCell == page_type_); }
+
+  bool HasSpace(const utils::FileOffset& cell_size) const;
+
+  void InsertCell(const CellKey& primary_key, const PageCell& cell);
+
+  void DeleteCell(const CellIndex& cell_index);
+
+  void Clear(void);
 
  private:
   // file related
@@ -63,6 +89,12 @@ class PageManager {
 
   // cell pointer array
   std::vector<uint16_t> cell_pointer_array_;
+
+  // key set
+  std::set<CellKey> key_set_;
+
+  // parent
+  PageIndex parent_;
 };
 
 }  // namespace internal

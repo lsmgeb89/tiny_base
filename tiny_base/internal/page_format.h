@@ -30,8 +30,27 @@ constexpr uint8_t table_header_length =
 constexpr uint8_t cell_pointer_array_offset = table_header_length;
 constexpr uint8_t cell_pointer_length = 2;
 
-/* Cell Content Format */
-constexpr uint32_t page_pointer_length = right_most_pointer_length;
+/* Table B-Tree Leaf Cell */
+constexpr uint8_t table_leaf_payload_length_offset = 0x00;
+constexpr uint8_t table_leaf_payload_length_length = 2;
+
+constexpr uint8_t table_leaf_rowid_offset =
+    table_leaf_payload_length_offset + table_leaf_payload_length_length;
+constexpr uint8_t table_leaf_rowid_length = 4;
+
+constexpr uint8_t table_leaf_payload_offset =
+    table_leaf_rowid_offset + table_leaf_rowid_length;
+
+/* Table B-Tree Interior Cell */
+constexpr uint8_t table_interior_left_pointer_offset = 0x00;
+constexpr uint8_t table_interior_left_pointer_length = 4;
+
+constexpr uint8_t table_interior_key_offset =
+    table_interior_left_pointer_offset + table_interior_left_pointer_length;
+constexpr uint8_t table_interior_key_length = 4;
+
+constexpr uint8_t table_interior_cell_length =
+    table_interior_key_offset + table_interior_key_length;
 
 }  // namespace internal
 

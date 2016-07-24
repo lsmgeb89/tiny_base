@@ -37,9 +37,11 @@ struct CreateTableCommand {
   std::vector<CreateTableColumn> column_list;
 };
 
+using ValueList = std::vector<std::experimental::any>;
+
 struct InsertIntoCommand {
   std::string table_name;
-  std::vector<std::experimental::any> value_list;
+  ValueList value_list;
 };
 
 }  // namespace sql

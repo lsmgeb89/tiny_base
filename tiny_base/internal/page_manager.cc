@@ -1,6 +1,8 @@
 #include <bitset>
+#include <cassert>
 #include <cstring>
 #include <iostream>
+
 #include "endian_util.h"
 #include "page_manager.h"
 #include "page_format.h"
@@ -14,14 +16,19 @@ PageManager::PageManager(utils::FileHandle& table_file,
       page_type_(InvalidCell),
       cell_num_(0),
       cell_content_offset_(page_size),
-      right_most_pointer_(0) {}
+      right_most_pointer_(0),
+      parent_(0) {}
 
 void PageManager::ParseInfo(void) {
+  CellKey key(0);
   std::vector<uint8_t> data_in;
   data_in.resize(table_header_length);
+
   // TODO: exception handling
   table_file_->Read(page_base_, reinterpret_cast<char*>(data_in.data()),
                     table_header_length);
+
+  // page header
   page_type_ = static_cast<PageType>(data_in[page_type_offset]);
   cell_num_ = data_in[cell_num_offset];
   std::memcpy(&cell_content_offset_,
@@ -43,6 +50,13 @@ void PageManager::ParseInfo(void) {
     utils::SwapEndianInPlace<decltype(cell_pointer_array_)::value_type>(
         cell_pointer_array_);
   }
+
+  // cell key
+  for (auto i = 0; 0 < cell_num_; i++) {
+    key = GetCellKey(i);
+    key = utils::SwapEndian<decltype(key)>(key);
+    key_set_.insert(key);
+  }
 }
 
 CellKeyRange PageManager::GetCellKeyRange(void) {
@@ -51,31 +65,61 @@ CellKeyRange PageManager::GetCellKeyRange(void) {
   return std::make_pair(min_key, max_key);
 }
 
-CellKey PageManager::GetCellKey(const uint8_t& cell_index) {
+CellKey PageManager::GetCellKey(const CellIndex& cell_index) {
   CellKey key;
-  uint8_t skip_bytes(0);
-  uint8_t read_bytes(0);
+  uint8_t offset(0);
+  uint8_t length(0);
 
-  // TODO: for index page
-  switch (page_type_) {
-    case IndexInteriorCell:
-      break;
-    case TableInteriorCell:
-      skip_bytes = 4;
-      read_bytes = 4;
-    case IndexLeafCell:
-      break;
-    case TableLeafCell:
-      skip_bytes = 0;  // TODO: should be 2
-      read_bytes = 4;
-    default:
-      break;
+  if (TableInteriorCell == page_type_) {
+    offset = table_interior_key_offset;
+    length = table_interior_key_length;
+  } else if (TableLeafCell == page_type_) {
+    offset = table_leaf_rowid_offset;
+    length = table_leaf_rowid_length;
   }
 
-  table_file_->Read(page_base_ + cell_pointer_array_[cell_index] + skip_bytes,
-                    reinterpret_cast<char*>(&key), read_bytes);
+  table_file_->Read(page_base_ + cell_pointer_array_[cell_index] + offset,
+                    reinterpret_cast<char*>(&key), length);
 
   return utils::SwapEndian<decltype(key)>(key);
+}
+
+PageCell PageManager::GetCell(const CellIndex& cell_index) {
+  PageCell cell;
+  uint16_t cell_size;
+
+  if (TableLeafCell == page_type_) {
+    table_file_->Read(page_base_ + cell_pointer_array_[cell_index],
+                      reinterpret_cast<char*>(&cell_size),
+                      table_leaf_payload_length_length);
+    cell_size = utils::SwapEndian<decltype(cell_size)>(cell_size);
+    cell_size += table_leaf_payload_offset;
+  } else if (TableInteriorCell == page_type_) {
+    cell_size = table_interior_cell_length;
+  }
+
+  cell.resize(cell_size);
+
+  table_file_->Read(page_base_ + cell_pointer_array_[cell_index], cell.data(),
+                    cell_size);
+
+  utils::SwapEndianInPlace<decltype(cell)::value_type>(cell);
+
+  return cell;
+}
+
+PagePointer PageManager::GetCellLeftPointer(const CellIndex& cell_index) {
+  PagePointer left_pointer;
+
+  assert(TableInteriorCell == page_type_);
+
+  table_file_->Read(page_base_ + cell_pointer_array_[cell_index],
+                    reinterpret_cast<char*>(&left_pointer),
+                    table_interior_left_pointer_length);
+
+  left_pointer = utils::SwapEndian<decltype(left_pointer)>(left_pointer);
+
+  return left_pointer;
 }
 
 PageIndex PageManager::GetLeftMostPagePointer(void) {
@@ -87,32 +131,51 @@ PageIndex PageManager::GetLeftMostPagePointer(void) {
 
   table_file_->Read(page_base_ + cell_content_offset_ + cell_pointer_array_[0],
                     reinterpret_cast<char*>(&page_pointer),
-                    page_pointer_length);
+                    table_interior_left_pointer_length);
   return utils::SwapEndian<decltype(page_pointer)>(page_pointer);
 }
 
-bool PageManager::HasSpace(const utils::FileOffset& record_size) const {
+bool PageManager::HasSpace(const utils::FileOffset& cell_size) const {
   utils::FilePosition cell_pointer_array_end =
       page_base_ + table_header_length + cell_num_ * cell_pointer_length;
 
   utils::FilePosition free_space =
       cell_content_offset_ - cell_pointer_array_end;
 
-  return (free_space >= record_size + cell_pointer_length);
+  return (free_space >= cell_size + cell_pointer_length);
 }
 
-void PageManager::InsertRecord(const uint8_t& cell_index,
-                               const PageRecord& record) {
-  cell_content_offset_ -= record.size();
+void PageManager::InsertCell(const CellKey& primary_key, const PageCell& cell) {
+  cell_content_offset_ -= cell.size();
+
+  key_set_.insert(primary_key);
+
+  auto cell_index = std::distance(key_set_.begin(), key_set_.find(primary_key));
 
   // TODO: recover cell_content_offset_ while error
-  table_file_->Write(page_base_ + cell_content_offset_, record.data(),
-                     record.size());
+  table_file_->Write(page_base_ + cell_content_offset_, cell.data(),
+                     cell.size());
   ++cell_num_;
+
   // TODO: check the cell_index is in the range of array (assert)
   cell_pointer_array_.insert(cell_pointer_array_.begin() + cell_index,
                              cell_content_offset_);
   UpdateInfo();
+}
+
+void PageManager::DeleteCell(const CellIndex& cell_index) {
+  // delete cell pointer
+  cell_pointer_array_.erase(cell_pointer_array_.begin() + cell_index);
+
+  // remove key in the set
+  std::vector<CellKey> key_list(key_set_.begin(), key_set_.end());
+  key_list.erase(key_list.begin() + cell_index);
+  key_set_.clear();
+  std::copy(key_list.begin(), key_list.end(),
+            std::inserter(key_set_, key_set_.begin()));
+
+  // decrease number
+  --cell_num_;
 }
 
 void PageManager::UpdateInfo(void) {
@@ -144,6 +207,20 @@ void PageManager::UpdateInfo(void) {
 
   table_file_->Write(page_base_, reinterpret_cast<char*>(data_out.data()),
                      length);
+}
+
+void PageManager::Clear(void) {
+  std::vector<uint8_t> data_out(page_size, 0);
+  table_file_->Write(page_base_, reinterpret_cast<char*>(data_out.data()),
+                     page_size);
+}
+
+void PageManager::SetCellLeftPointer(const CellIndex& cell_index,
+                                     const PagePointer& left_pointer) {
+  PagePointer data_out(utils::SwapEndian<PagePointer>(left_pointer));
+  table_file_->Write(
+      page_base_ + cell_content_offset_ + cell_pointer_array_[cell_index],
+      reinterpret_cast<char*>(&data_out), table_interior_left_pointer_length);
 }
 
 }  // namespace internal
