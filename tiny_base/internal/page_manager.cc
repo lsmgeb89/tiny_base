@@ -20,7 +20,6 @@ PageManager::PageManager(utils::FileHandle& table_file,
       parent_(0) {}
 
 void PageManager::ParseInfo(void) {
-  CellKey key(0);
   std::vector<uint8_t> data_in;
   data_in.resize(table_header_length);
 
@@ -43,7 +42,7 @@ void PageManager::ParseInfo(void) {
 
   // cell point array
   if (cell_num_) {
-    cell_pointer_array_.resize(cell_num_ * cell_pointer_length);
+    cell_pointer_array_.resize(cell_num_);
     table_file_->Read(page_base_ + table_header_length,
                       reinterpret_cast<char*>(cell_pointer_array_.data()),
                       cell_num_ * cell_pointer_length);
@@ -52,10 +51,8 @@ void PageManager::ParseInfo(void) {
   }
 
   // cell key
-  for (auto i = 0; 0 < cell_num_; i++) {
-    key = GetCellKey(i);
-    key = utils::SwapEndian<decltype(key)>(key);
-    key_set_.insert(key);
+  for (auto i = 0; i < cell_num_; i++) {
+    key_set_.insert(GetCellKey(i));
   }
 }
 

@@ -26,13 +26,13 @@ int main(int argc, char* argv[]) {
   if (!tiny_base_tables.Exists()) {
     tiny_base_tables.CreateTable(root_schema_tables);
   } else {
-    tiny_base_tables.Load(root_schema_tables);
+    // tiny_base_tables.Load(root_schema_tables, 255, 0);
   }
 
   if (!tiny_base_columns.Exists()) {
     tiny_base_columns.CreateTable(root_schema_columns);
   } else {
-    tiny_base_columns.Load(root_schema_columns);
+    // tiny_base_columns.Load(root_schema_columns, 255, 0);
   }
 
   /* ----------- User Table ----------- */
@@ -46,13 +46,18 @@ int main(int argc, char* argv[]) {
   if (!user_table.Exists()) {
     user_table.CreateTable(c_1);
   } else {
-    user_table.Load(c_1);
+    user_table.Load(c_1, 5, 8);
   }
 
   char base('a');
   char code;
+#if 0
   std::vector<uint8_t> index = {4,  3,  9,  2,  5,  6,  7, 8,
-                                10, 11, 12, 13, 14, 15, 16};
+                                10, 11, 12, 13, 14, 15, 16,
+                                17, 18, 19, 20, 21};
+#else
+  std::vector<uint8_t> index = {21};
+#endif
 
   for (auto i : index) {
     code = base + i;

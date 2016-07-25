@@ -23,7 +23,8 @@ class TableManager {
 
   bool Exists(void) { return fs::exists(file_path_); }
 
-  void Load(const TableSchema& schema);
+  void Load(const TableSchema& schema, const uint8_t& fanout,
+            const PageIndex& root_page);
 
   /* Physically create table and save schema */
   void CreateTable(const sql::CreateTableCommand& command);
@@ -121,6 +122,8 @@ class TableManager {
   }
 
   void UpdateParent(const PageIndex& page_index);
+
+  void LoadParent(const PageIndex& page_index);
 };
 
 }  // namespace page

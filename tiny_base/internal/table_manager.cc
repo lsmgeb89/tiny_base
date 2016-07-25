@@ -18,11 +18,14 @@ TableManager::TableManager(const fs::path& file_path)
 
 TableManager::~TableManager(void) {}
 
-void TableManager::Load(const TableSchema& schema) {
+void TableManager::Load(const TableSchema& schema, const uint8_t& fanout,
+                        const PageIndex& root_page) {
   table_schema_ = schema;
-  // TODO: fanout and root page
-  // TODO: traverse to set parent
+  fanout_ = fanout;
+  root_page_ = root_page;
+
   LoadPage();
+  LoadParent(root_page_);
 }
 
 void TableManager::CreateTable(const sql::CreateTableCommand& command) {
@@ -425,6 +428,20 @@ void TableManager::UpdateParent(const PageIndex& page_index) {
     SetParent(iter->GetCellLeftPointer(i), page_index);
   }
   SetParent(iter->GetRightMostPagePointer(), page_index);
+}
+
+void TableManager::LoadParent(const PageIndex& page_index) {
+  if (IsLeaf(page_index)) {
+    return;
+  }
+
+  auto iter = page_list_.begin() + page_index;
+  for (auto i = 0; i < iter->GetCellNum(); ++i) {
+    SetParent(iter->GetCellLeftPointer(i), page_index);
+    LoadParent(iter->GetCellLeftPointer(i));
+  }
+  SetParent(iter->GetRightMostPagePointer(), page_index);
+  LoadParent(iter->GetRightMostPagePointer());
 }
 
 }  // namespace internal
