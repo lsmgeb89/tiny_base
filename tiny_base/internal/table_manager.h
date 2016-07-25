@@ -52,11 +52,13 @@ class TableManager {
   void LoadPage(void);
 
   PageIndex SplitLeafPage(const PageIndex& target_page,
-                          const CellIndex& cell_index);
+                          const CellIndex& cell_index,
+                          const PrimaryKey& primary_key, const PageCell& cell);
 
   PageIndex SplitInteriorPage(const PageIndex& target_page,
                               const CellPivot& cell_pivot,
                               const PrimaryKey& primary_key,
+                              const PageCell& cell,
                               std::shared_ptr<PageIndex> right_most_pointer);
 
   // TODO: considering merge them into command class (abstract class)
@@ -117,6 +119,8 @@ class TableManager {
   void SetParent(const PageIndex& page_index, const PageIndex& parent_index) {
     return page_list_[page_index].SetParent(parent_index);
   }
+
+  void UpdateParent(const PageIndex& page_index);
 };
 
 }  // namespace page

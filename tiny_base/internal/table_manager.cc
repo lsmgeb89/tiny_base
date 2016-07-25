@@ -171,14 +171,12 @@ void TableManager::InsertCell(const PageIndex& target_page,
     // right split
     PageIndex new_page(0);
     if (IsLeaf(target_page)) {
-      new_page = SplitLeafPage(target_page, cell_pivot.first);
+      new_page =
+          SplitLeafPage(target_page, cell_pivot.first, primary_key, cell);
     } else {
-      new_page = SplitInteriorPage(target_page, cell_pivot, primary_key,
+      new_page = SplitInteriorPage(target_page, cell_pivot, primary_key, cell,
                                    right_most_pointer);
     }
-
-    // insert this cell
-    DoInsertCell(new_page, primary_key, cell);
 
     if (IsRoot(target_page)) {
       parent_page = CreatePage(TableInteriorCell);
@@ -250,16 +248,17 @@ void TableManager::LoadPage(void) {
 
 PageIndex TableManager::SplitInteriorPage(
     const PageIndex& target_page, const CellPivot& cell_pivot,
-    const PrimaryKey& primary_key,
+    const PrimaryKey& primary_key, const PageCell& cell,
     std::shared_ptr<PageIndex> right_most_pointer) {
   assert(page_list_[target_page].GetPageType() == TableInteriorCell);
-  // create a new page
+
+  CellIndex copy_index(0);
+  CellIndex insert_index(0);
+  CellIndex delete_index(0);
   PageIndex new_page(CreatePage(TableInteriorCell));
   auto iter_target = page_list_.begin() + target_page;
   uint8_t target_cell_num(iter_target->GetCellNum());
   CellKeyRange target_key_range(iter_target->GetCellKeyRange());
-  CellIndex copy_index(0);
-  CellIndex delete_index(0);
 
   // up key is in the target
   if (primary_key != cell_pivot.second) {
@@ -279,6 +278,8 @@ PageIndex TableManager::SplitInteriorPage(
     SetRightMostPointer(target_page,
                         iter_target->GetCellLeftPointer(delete_index));
 
+    insert_index = new_page;
+
   } else if (primary_key < target_key_range.first) {
     // lower level left most split to target
     SetRightMostPointer(new_page, GetRightMostPointer(target_page));
@@ -290,12 +291,16 @@ PageIndex TableManager::SplitInteriorPage(
     SetRightMostPointer(target_page,
                         iter_target->GetCellLeftPointer(delete_index));
 
+    insert_index = target_page;
+
   } else if (GetCellKey(target_page, delete_index - 1) < primary_key &&
              primary_key < cell_pivot.second) {
     // primary key is just left to pivot
     SetRightMostPointer(new_page, GetRightMostPointer(target_page));
 
     SetRightMostPointer(target_page, *right_most_pointer);
+
+    insert_index = target_page;
 
   } else if (primary_key > cell_pivot.second &&
              primary_key < GetCellKey(target_page, delete_index + 1)) {
@@ -307,6 +312,8 @@ PageIndex TableManager::SplitInteriorPage(
     SetRightMostPointer(target_page,
                         iter_target->GetCellLeftPointer(delete_index));
 
+    insert_index = new_page;
+
   } else if (primary_key == cell_pivot.second) {
     // primary key is pivot
     SetRightMostPointer(new_page, GetRightMostPointer(target_page));
@@ -315,6 +322,8 @@ PageIndex TableManager::SplitInteriorPage(
                         iter_target->GetCellLeftPointer(delete_index));
 
     iter_target->SetCellLeftPointer(delete_index, *right_most_pointer);
+
+    insert_index = new_page;
   } else {
     std::cerr << "not support" << std::endl;
   }
@@ -332,11 +341,20 @@ PageIndex TableManager::SplitInteriorPage(
   // update changes
   iter_target->UpdateInfo();
 
+  // insert this cell
+  DoInsertCell(insert_index, primary_key, cell);
+
+  // update parent
+  UpdateParent(target_page);
+  UpdateParent(new_page);
+
   return new_page;
 }
 
 PageIndex TableManager::SplitLeafPage(const PageIndex& target_page,
-                                      const CellIndex& cell_index) {
+                                      const CellIndex& cell_index,
+                                      const PrimaryKey& primary_key,
+                                      const PageCell& cell) {
   assert(page_list_[target_page].GetPageType() == TableLeafCell);
 
   PageIndex new_page(CreatePage(TableLeafCell));
@@ -354,6 +372,9 @@ PageIndex TableManager::SplitLeafPage(const PageIndex& target_page,
 
   // update changes
   iter_target->UpdateInfo();
+
+  // insert this cell
+  DoInsertCell(new_page, primary_key, cell);
 
   return new_page;
 }
@@ -396,6 +417,14 @@ CellPivot TableManager::GetCellPivot(const PageIndex& page_index,
       std::distance(key_set.begin(), key_set.lower_bound(pivot.second));
 
   return pivot;
+}
+
+void TableManager::UpdateParent(const PageIndex& page_index) {
+  auto iter = page_list_.begin() + page_index;
+  for (auto i = 0; i < iter->GetCellNum(); ++i) {
+    SetParent(iter->GetCellLeftPointer(i), page_index);
+  }
+  SetParent(iter->GetRightMostPagePointer(), page_index);
 }
 
 }  // namespace internal

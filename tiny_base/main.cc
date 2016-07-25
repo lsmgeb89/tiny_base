@@ -51,7 +51,8 @@ int main(int argc, char* argv[]) {
 
   char base('a');
   char code;
-  std::vector<uint8_t> index = {4, 3, 9, 2, 5, 6, 7, 8, 10, 11, 12, 13, 14};
+  std::vector<uint8_t> index = {4,  3,  9,  2,  5,  6,  7, 8,
+                                10, 11, 12, 13, 14, 15, 16};
 
   for (auto i : index) {
     code = base + i;
