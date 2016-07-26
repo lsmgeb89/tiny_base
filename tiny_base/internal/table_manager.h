@@ -53,7 +53,7 @@ class TableManager {
   void LoadPage(void);
 
   PageIndex SplitLeafPage(const PageIndex& target_page,
-                          const CellIndex& cell_index,
+                          const CellPivot& cell_pivot,
                           const PrimaryKey& primary_key, const PageCell& cell);
 
   PageIndex SplitInteriorPage(const PageIndex& target_page,
@@ -99,8 +99,17 @@ class TableManager {
     return page_list_[page_index].GetCellKey(cell_index);
   }
 
-  PagePointer GetRightMostPointer(const PageIndex& page_index) {
+  PagePointer GetRightMostPointer(const PageIndex& page_index) const {
     return page_list_[page_index].GetRightMostPagePointer();
+  }
+
+  const CellIndex GetLowerBound(const PageIndex& page_index,
+                                const CellKey& pri_key) const {
+    return page_list_[page_index].GetLowerBound(pri_key);
+  }
+
+  const CellIndex GetCellNum(const PageIndex& page_index) const {
+    return page_list_[page_index].GetCellNum();
   }
 
   void SetRightMostPointer(const PageIndex& page_index,
@@ -119,6 +128,12 @@ class TableManager {
 
   void SetParent(const PageIndex& page_index, const PageIndex& parent_index) {
     return page_list_[page_index].SetParent(parent_index);
+  }
+
+  void SetCellLeftPointer(const PageIndex& page_index,
+                          const CellIndex& cell_index,
+                          const PagePointer& left_pointer) {
+    return page_list_[page_index].SetCellLeftPointer(cell_index, left_pointer);
   }
 
   void UpdateParent(const PageIndex& page_index);

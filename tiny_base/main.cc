@@ -50,17 +50,22 @@ int main(int argc, char* argv[]) {
   }
 
   char base('a');
+  char n_base('A');
   char code;
-#if 0
-  std::vector<uint8_t> index = {4,  3,  9,  2,  5,  6,  7, 8,
-                                10, 11, 12, 13, 14, 15, 16,
-                                17, 18, 19, 20, 21};
+#if 1
+  std::vector<uint8_t> index = {4,  3,  9,  2,  5,  6,  7,  8,  10, 11, 12,
+                                13, 14, 15, 16, 17, 18, 19, 20, 21, 1};
 #else
   std::vector<uint8_t> index = {21};
 #endif
 
   for (auto i : index) {
-    code = base + i;
+    if (i > 0) {
+      code = base + i;
+    } else {
+      code = n_base - i;
+    }
+
     user_table.InsertInto(
         {"greek", {static_cast<int32_t>(i), std::string(114, code)}});
   }

@@ -50,9 +50,13 @@ class PageManager {
 
   PageIndex GetLeftMostPagePointer(void);
 
-  PageIndex GetRightMostPagePointer(void) { return right_most_pointer_; }
+  PageIndex GetRightMostPagePointer(void) const { return right_most_pointer_; }
 
   PagePointer GetCellLeftPointer(const CellIndex& cell_index);
+
+  const CellIndex GetLowerBound(const CellKey& key) const {
+    return std::distance(key_set_.begin(), key_set_.lower_bound(key));
+  }
 
   // Setter
   void SetPageType(const PageType& page_type) { page_type_ = page_type; }
@@ -75,6 +79,10 @@ class PageManager {
   void DeleteCell(const CellIndex& cell_index);
 
   void Clear(void);
+
+  void Reset(void);
+
+  void Reorder(void);
 
  private:
   // file related

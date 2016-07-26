@@ -126,7 +126,7 @@ PageIndex PageManager::GetLeftMostPagePointer(void) {
     // TODO: throw exception
   }
 
-  table_file_->Read(page_base_ + cell_content_offset_ + cell_pointer_array_[0],
+  table_file_->Read(page_base_ + cell_pointer_array_[0],
                     reinterpret_cast<char*>(&page_pointer),
                     table_interior_left_pointer_length);
   return utils::SwapEndian<decltype(page_pointer)>(page_pointer);
@@ -134,7 +134,7 @@ PageIndex PageManager::GetLeftMostPagePointer(void) {
 
 bool PageManager::HasSpace(const utils::FileOffset& cell_size) const {
   utils::FilePosition cell_pointer_array_end =
-      page_base_ + table_header_length + cell_num_ * cell_pointer_length;
+      table_header_length + cell_num_ * cell_pointer_length;
 
   utils::FilePosition free_space =
       cell_content_offset_ - cell_pointer_array_end;
@@ -215,9 +215,35 @@ void PageManager::Clear(void) {
 void PageManager::SetCellLeftPointer(const CellIndex& cell_index,
                                      const PagePointer& left_pointer) {
   PagePointer data_out(utils::SwapEndian<PagePointer>(left_pointer));
-  table_file_->Write(
-      page_base_ + cell_content_offset_ + cell_pointer_array_[cell_index],
-      reinterpret_cast<char*>(&data_out), table_interior_left_pointer_length);
+  table_file_->Write(page_base_ + cell_pointer_array_[cell_index],
+                     reinterpret_cast<char*>(&data_out),
+                     table_interior_left_pointer_length);
+}
+
+void PageManager::Reset(void) {
+  cell_num_ = 0;
+  cell_content_offset_ = page_size;
+  cell_pointer_array_.clear();
+  key_set_.clear();
+}
+
+void PageManager::Reorder(void) {
+  std::vector<std::pair<CellKey, PageCell>> cell_list;
+
+  // Read back cell
+  for (auto i = 0; i < cell_num_; i++) {
+    cell_list.push_back(std::make_pair(GetCellKey(i), GetCell(i)));
+  }
+
+  // Fill zero
+  Clear();
+
+  // Reset for insert
+  Reset();
+
+  for (auto cell_pair : cell_list) {
+    InsertCell(cell_pair.first, cell_pair.second);
+  }
 }
 
 }  // namespace internal

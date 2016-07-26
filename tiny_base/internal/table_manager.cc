@@ -165,7 +165,7 @@ void TableManager::InsertCell(const PageIndex& target_page,
                               const PrimaryKey& primary_key,
                               const PageCell& cell,
                               std::shared_ptr<PageIndex> right_most_pointer) {
-  if (WillOverflow(target_page)) {
+  if (WillOverflow(target_page) || !HasSpace(target_page, cell.size())) {
     PageIndex parent_page(0);
     PageIndex left_child_page(0);
     std::shared_ptr<PageIndex> right_child_page(std::make_shared<PageIndex>(0));
@@ -174,8 +174,7 @@ void TableManager::InsertCell(const PageIndex& target_page,
     // right split
     PageIndex new_page(0);
     if (IsLeaf(target_page)) {
-      new_page =
-          SplitLeafPage(target_page, cell_pivot.first, primary_key, cell);
+      new_page = SplitLeafPage(target_page, cell_pivot, primary_key, cell);
     } else {
       new_page = SplitInteriorPage(target_page, cell_pivot, primary_key, cell,
                                    right_most_pointer);
@@ -202,9 +201,20 @@ void TableManager::InsertCell(const PageIndex& target_page,
                PrepareInteriorCell(left_child_page, cell_pivot.second),
                right_child_page);
   } else {
-    if (right_most_pointer) {
-      SetRightMostPointer(target_page, *right_most_pointer);
+    if (!IsLeaf(target_page)) {
+      const CellIndex bound(GetLowerBound(target_page, primary_key));
+      assert(right_most_pointer);
+      if (bound == GetCellNum(target_page)) {
+        SetRightMostPointer(target_page, *right_most_pointer);
+      } else {
+        SetCellLeftPointer(target_page, bound, *right_most_pointer);
+      }
+    } else {
+      if (right_most_pointer) {
+        SetRightMostPointer(target_page, *right_most_pointer);
+      }
     }
+
     DoInsertCell(target_page, primary_key, cell);
   }
 }
@@ -344,6 +354,9 @@ PageIndex TableManager::SplitInteriorPage(
   // update changes
   iter_target->UpdateInfo();
 
+  // recorder
+  iter_target->Reorder();
+
   // insert this cell
   DoInsertCell(insert_index, primary_key, cell);
 
@@ -355,29 +368,38 @@ PageIndex TableManager::SplitInteriorPage(
 }
 
 PageIndex TableManager::SplitLeafPage(const PageIndex& target_page,
-                                      const CellIndex& cell_index,
+                                      const CellPivot& cell_pivot,
                                       const PrimaryKey& primary_key,
                                       const PageCell& cell) {
   assert(page_list_[target_page].GetPageType() == TableLeafCell);
 
   PageIndex new_page(CreatePage(TableLeafCell));
+  CellIndex insert_index(primary_key >= cell_pivot.second ? new_page
+                                                          : target_page);
   auto iter_target = page_list_.begin() + target_page;
+  auto iter_new = page_list_.begin() + new_page;
   uint8_t target_cell_num(iter_target->GetCellNum());
 
-  // move cells into new page (fix index because of vector)
-  for (auto i = cell_index; i < target_cell_num; i++) {
-    DoInsertCell(new_page, iter_target->GetCellKey(cell_index),
-                 iter_target->GetCell(cell_index));
-    iter_target->DeleteCell(cell_index);
+  // move cells into new page (fixed index because of vector)
+  for (auto i = cell_pivot.first; i < target_cell_num; i++) {
+    DoInsertCell(new_page, iter_target->GetCellKey(cell_pivot.first),
+                 iter_target->GetCell(cell_pivot.first));
+    iter_target->DeleteCell(cell_pivot.first);
   }
 
-  iter_target->SetPageRightMostPointer(new_page);
+  // right most pointer
+  SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+  SetRightMostPointer(target_page, new_page);
 
   // update changes
   iter_target->UpdateInfo();
+  iter_new->UpdateInfo();
+
+  // recorder
+  iter_target->Reorder();
 
   // insert this cell
-  DoInsertCell(new_page, primary_key, cell);
+  DoInsertCell(insert_index, primary_key, cell);
 
   return new_page;
 }
