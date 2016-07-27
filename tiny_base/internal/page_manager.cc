@@ -105,7 +105,7 @@ PageCell PageManager::GetCell(const CellIndex& cell_index) {
   return cell;
 }
 
-PagePointer PageManager::GetCellLeftPointer(const CellIndex& cell_index) {
+PagePointer PageManager::GetCellLeftPointer(const CellIndex& cell_index) const {
   PagePointer left_pointer;
 
   assert(TableInteriorCell == page_type_);

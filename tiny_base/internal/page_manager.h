@@ -52,7 +52,7 @@ class PageManager {
 
   PageIndex GetRightMostPagePointer(void) const { return right_most_pointer_; }
 
-  PagePointer GetCellLeftPointer(const CellIndex& cell_index);
+  PagePointer GetCellLeftPointer(const CellIndex& cell_index) const;
 
   const CellIndex GetLowerBound(const CellKey& key) const {
     return std::distance(key_set_.begin(), key_set_.lower_bound(key));

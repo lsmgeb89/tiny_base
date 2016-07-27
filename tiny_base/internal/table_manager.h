@@ -108,6 +108,11 @@ class TableManager {
     return page_list_[page_index].GetLowerBound(pri_key);
   }
 
+  const CellIndex GetCellLeftPointer(const PageIndex& page_index,
+                           const CellIndex& cell_index) const {
+    return page_list_[page_index].GetCellLeftPointer(cell_index);
+  }
+
   const CellIndex GetCellNum(const PageIndex& page_index) const {
     return page_list_[page_index].GetCellNum();
   }

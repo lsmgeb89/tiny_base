@@ -231,7 +231,7 @@ PageIndex TableManager::SearchPage(const PageIndex& current_page,
     return SearchPage(page_list_[current_page].GetLeftMostPagePointer(),
                       primary_key);
   } else if (primary_key > key_range.first && primary_key < key_range.second) {
-    return current_page;
+    return GetCellLeftPointer(current_page, GetLowerBound(current_page, primary_key));
   } else if (primary_key > key_range.second) {
     return SearchPage(page_list_[current_page].GetRightMostPagePointer(),
                       primary_key);
@@ -266,7 +266,7 @@ PageIndex TableManager::SplitInteriorPage(
   assert(page_list_[target_page].GetPageType() == TableInteriorCell);
 
   CellIndex copy_index(0);
-  CellIndex insert_index(0);
+  CellIndex insert_index(std::numeric_limits<CellIndex>::max());
   CellIndex delete_index(0);
   PageIndex new_page(CreatePage(TableInteriorCell));
   auto iter_target = page_list_.begin() + target_page;
@@ -306,6 +306,30 @@ PageIndex TableManager::SplitInteriorPage(
 
     insert_index = target_page;
 
+  } else if (target_key_range.first < primary_key &&
+             primary_key < GetCellKey(target_page, delete_index - 1)) {
+    // primary key is between minimum and pivot
+    SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+
+    iter_target->SetCellLeftPointer(GetLowerBound(target_page, primary_key), *right_most_pointer);
+
+    SetRightMostPointer(target_page,
+                        iter_target->GetCellLeftPointer(delete_index));
+
+    insert_index = target_page;
+
+  } else if (primary_key > GetCellKey(target_page, delete_index + 1) &&
+             primary_key < target_key_range.second) {
+    // primary key is between pivot and maximum
+    SetRightMostPointer(new_page, GetRightMostPointer(target_page));
+
+    iter_target->SetCellLeftPointer(GetLowerBound(target_page, primary_key), *right_most_pointer);
+
+    SetRightMostPointer(target_page,
+                        iter_target->GetCellLeftPointer(delete_index));
+
+    insert_index = new_page;
+
   } else if (GetCellKey(target_page, delete_index - 1) < primary_key &&
              primary_key < cell_pivot.second) {
     // primary key is just left to pivot
@@ -336,7 +360,6 @@ PageIndex TableManager::SplitInteriorPage(
 
     iter_target->SetCellLeftPointer(delete_index, *right_most_pointer);
 
-    insert_index = new_page;
   } else {
     std::cerr << "not support" << std::endl;
   }
@@ -358,7 +381,9 @@ PageIndex TableManager::SplitInteriorPage(
   iter_target->Reorder();
 
   // insert this cell
-  DoInsertCell(insert_index, primary_key, cell);
+  if (insert_index != std::numeric_limits<CellIndex>::max()) {
+    DoInsertCell(insert_index, primary_key, cell);
+  }
 
   // update parent
   UpdateParent(target_page);
