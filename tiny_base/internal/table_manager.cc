@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <cstring>
 #include <cassert>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 
+#include "cell.h"
 #include "endian_util.h"
 #include "page_format.h"
 #include "table_manager.h"
@@ -42,6 +45,15 @@ void TableManager::CreateTable(const sql::CreateTableCommand& command) {
   CreatePage(TableLeafCell);
 }
 
+const std::string TableManager::SelectFrom(
+    const sql::SelectFromCommand& command) {
+  std::vector<PageCell> tuples;
+
+  PullTuple(command, tuples);
+
+  return FilterTuple(command, tuples);
+}
+
 void TableManager::InsertInto(const sql::InsertIntoCommand& command) {
   CellKey pri_key(GetPrimaryKey(command));
   PageIndex target_page(SearchPage(root_page_, pri_key));
@@ -75,13 +87,32 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
   primary_key = GetPrimaryKey(command);
   primary_key = utils::SwapEndian<decltype(primary_key)>(primary_key);
 
-  // copy rowid
-  table_leaf_cell.resize(table_leaf_rowid_offset + table_leaf_rowid_length);
+  // copy rowid (leave space for number of payload)
+  table_leaf_cell.resize(table_leaf_cell.size() + table_leaf_rowid_offset +
+                         table_leaf_rowid_length);
   std::memcpy(table_leaf_cell.data() + offset, &primary_key,
               table_leaf_rowid_length);
   offset += table_leaf_rowid_length;
 
-  for (auto i = 0; i < table_schema_.column_list.size(); i++) {
+  // payload header
+  uint8_t number_of_columns(static_cast<uint8_t>(command.value_list.size()));
+  table_leaf_cell.resize(table_leaf_cell.size() +
+                         table_leaf_payload_num_of_columns_length);
+  table_leaf_cell.at(offset) = number_of_columns;
+  offset += table_leaf_payload_num_of_columns_length;
+
+  uint8_t type_code(0);
+  table_leaf_cell.resize(table_leaf_cell.size() +
+                         table_leaf_payload_type_code_length *
+                             number_of_columns);
+  for (auto i = 0; i < number_of_columns; i++) {
+    type_code = table_schema_.column_list.at(i).type;
+    table_leaf_cell.at(offset) = type_code;
+    offset += table_leaf_payload_type_code_length;
+  }
+
+  // payload body
+  for (auto i = 0; i < number_of_columns; i++) {
     if (table_schema_.column_list[i].type != sql::Text) {
       type_size = sql::DataTypeSize[table_schema_.column_list[i].type];
       table_leaf_cell.resize(table_leaf_cell.size() + type_size);
@@ -114,12 +145,32 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
         value_64 = utils::SwapEndian<decltype(value_64)>(value_64);
         std::memcpy(table_leaf_cell.data() + offset, &value_64, type_size);
       } break;
-      case sql::Real:
-      case sql::Double:
-      case sql::DateTime:
-      case sql::Date:
-        // TODO: implement them
-        break;
+      case sql::Real: {
+        float value_float =
+            sql::expr::any_cast<float>(command.value_list.at(i));
+        value_float = utils::SwapEndian<decltype(value_float)>(value_float);
+        std::memcpy(table_leaf_cell.data() + offset, &value_float, type_size);
+      } break;
+      case sql::Double: {
+        double value_double =
+            sql::expr::any_cast<double>(command.value_list.at(i));
+        value_double = utils::SwapEndian<decltype(value_double)>(value_double);
+        std::memcpy(table_leaf_cell.data() + offset, &value_double, type_size);
+      } break;
+      case sql::DateTime: {
+        uint64_t value_date_time =
+            sql::expr::any_cast<uint64_t>(command.value_list.at(i));
+        value_date_time =
+            utils::SwapEndian<decltype(value_date_time)>(value_date_time);
+        std::memcpy(table_leaf_cell.data() + offset, &value_date_time,
+                    type_size);
+      } break;
+      case sql::Date: {
+        uint64_t value_date =
+            sql::expr::any_cast<uint64_t>(command.value_list.at(i));
+        value_date = utils::SwapEndian<decltype(value_date)>(value_date);
+        std::memcpy(table_leaf_cell.data() + offset, &value_date, type_size);
+      } break;
       case sql::Text: {
         std::string value_str =
             std::experimental::any_cast<std::string>(command.value_list[i]);
@@ -128,6 +179,10 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
         std::reverse(value_str.begin(), value_str.end());
         std::copy(value_str.begin(), value_str.end(),
                   table_leaf_cell.data() + offset);
+
+        // update real type for string
+        table_leaf_cell.at(table_leaf_payload_type_codes_offset + i) =
+            sql::Text + type_size;
       } break;
       default:
         break;
@@ -136,6 +191,7 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
     offset += type_size;
   }
 
+  // payload size
   payload_size = table_leaf_cell.size() - table_leaf_payload_offset;
   payload_size = utils::SwapEndian<decltype(payload_size)>(payload_size);
   std::memcpy(table_leaf_cell.data() + table_leaf_payload_length_offset,
@@ -231,7 +287,8 @@ PageIndex TableManager::SearchPage(const PageIndex& current_page,
     return SearchPage(page_list_[current_page].GetLeftMostPagePointer(),
                       primary_key);
   } else if (primary_key > key_range.first && primary_key < key_range.second) {
-    return GetCellLeftPointer(current_page, GetLowerBound(current_page, primary_key));
+    return GetCellLeftPointer(current_page,
+                              GetLowerBound(current_page, primary_key));
   } else if (primary_key > key_range.second) {
     return SearchPage(page_list_[current_page].GetRightMostPagePointer(),
                       primary_key);
@@ -311,7 +368,8 @@ PageIndex TableManager::SplitInteriorPage(
     // primary key is between minimum and pivot
     SetRightMostPointer(new_page, GetRightMostPointer(target_page));
 
-    iter_target->SetCellLeftPointer(GetLowerBound(target_page, primary_key), *right_most_pointer);
+    iter_target->SetCellLeftPointer(GetLowerBound(target_page, primary_key),
+                                    *right_most_pointer);
 
     SetRightMostPointer(target_page,
                         iter_target->GetCellLeftPointer(delete_index));
@@ -323,7 +381,8 @@ PageIndex TableManager::SplitInteriorPage(
     // primary key is between pivot and maximum
     SetRightMostPointer(new_page, GetRightMostPointer(target_page));
 
-    iter_target->SetCellLeftPointer(GetLowerBound(target_page, primary_key), *right_most_pointer);
+    iter_target->SetCellLeftPointer(GetLowerBound(target_page, primary_key),
+                                    *right_most_pointer);
 
     SetRightMostPointer(target_page,
                         iter_target->GetCellLeftPointer(delete_index));
@@ -489,6 +548,179 @@ void TableManager::LoadParent(const PageIndex& page_index) {
   }
   SetParent(iter->GetRightMostPagePointer(), page_index);
   LoadParent(iter->GetRightMostPagePointer());
+}
+
+void TableManager::PullTupleWithPrimary(const sql::SelectFromCommand& command,
+                                        std::vector<PageCell>& tuples) {
+  PageRange range;
+  int32_t condition_value = sql::expr::any_cast<int32_t>(command.where->value);
+
+  PageIndex target_page(SearchPage(root_page_, condition_value));
+  PageIndex min_page(
+      SearchPage(root_page_, std::numeric_limits<PrimaryKey>::min()));
+  PageIndex max_page(
+      SearchPage(root_page_, std::numeric_limits<PrimaryKey>::max()));
+
+  switch (command.where->condition_operator) {
+    case sql::Equal:
+      range = std::make_pair(target_page, target_page);
+      break;
+    case sql::Unequal:
+      range = std::make_pair(min_page, max_page);
+      break;
+    case sql::Larger:
+      range = std::make_pair(target_page, max_page);
+      break;
+    case sql::Smaller:
+      range = std::make_pair(min_page, target_page);
+      break;
+    case sql::NotLarger:
+      range = std::make_pair(min_page, target_page);
+      break;
+    case sql::NotSmaller:
+      range = std::make_pair(target_page, max_page);
+      break;
+    default:
+      break;
+  }
+
+  if (range.first == range.second) {
+    page_list_.at(range.first).AppendAllCells(tuples);
+  } else {
+    PageIndex iter = range.first;
+    PageIndex iter_end = GetRightMostPointer(range.second);
+
+    do {
+      page_list_.at(iter).AppendAllCells(tuples);
+      iter = GetRightMostPointer(iter);
+    } while (iter != iter_end);
+  }
+}
+
+void TableManager::PullTuple(const sql::SelectFromCommand& command,
+                             std::vector<PageCell>& tuples) {
+  // with primary key condition
+  if (command.where && IsPrimaryKey(command.where->column_name)) {
+    PullTupleWithPrimary(command, tuples);
+  } else {
+    // iterate through leaf page
+    PageIndex iter(
+        SearchPage(root_page_, std::numeric_limits<PrimaryKey>::min()));
+
+    do {
+      page_list_.at(iter).AppendAllCells(tuples);
+      iter = page_list_.at(iter).GetRightMostPagePointer();
+      // TODO: start page index from 1 or find a way to identify zero leaf page
+      // in the middle
+    } while (iter);
+  }
+}
+
+const std::string TableManager::FilterTuple(
+    const sql::SelectFromCommand& command, std::vector<PageCell>& tuples) {
+  // gather type info
+  std::vector<std::ptrdiff_t> column_indexes;
+  std::vector<sql::DataType> column_types;
+  std::vector<std::size_t> column_max_length;
+  for (auto name : command.column_name) {
+    auto index(GetColumnIndex(name));
+    column_indexes.push_back(index);
+    column_types.push_back(table_schema_.column_list.at(index).type);
+    column_max_length.push_back(name.size());
+  }
+
+  std::ptrdiff_t cond_var_type_index(0);
+  sql::DataType cond_var_type(sql::Invalid);
+  if (command.where) {
+    cond_var_type_index = GetColumnIndex(command.where->column_name);
+    cond_var_type = table_schema_.column_list.at(cond_var_type_index).type;
+  }
+
+  // core loop
+  bool expr_res;
+  PageCell value;
+  sql::Value lhs;
+  std::vector<std::vector<std::string>> out_str;
+  auto iter = tuples.begin();
+  while (iter != tuples.end()) {
+    // apply condition
+    if (command.where) {
+      value = GetValue(*iter, cond_var_type_index);
+      lhs = sql::BytesToValue(cond_var_type, value);
+      expr_res = sql::CompareValue(lhs, command.where->value, cond_var_type,
+                                   command.where->condition_operator);
+
+      if (!expr_res) {
+        iter = tuples.erase(iter);
+        continue;
+      }
+    }
+
+    // select columns
+    std::vector<std::string> tuple_str;
+    for (auto i = 0; i < column_indexes.size(); i++) {
+      value = GetValue(*iter, column_indexes.at(i));
+      std::string value_str = sql::BytesToString(column_types.at(i), value);
+      tuple_str.push_back(value_str);
+      if (column_max_length.at(i) < value_str.size()) {
+        column_max_length.at(i) = value_str.size();
+      }
+    }
+    out_str.push_back(tuple_str);
+
+    // next line
+    iter++;
+  }
+
+  // final output
+  std::stringstream out_stream;
+
+  if (out_str.empty()) {
+    out_stream << "Empty set";
+  } else {
+    // form delimited line
+    std::string delimit_line("+");
+    for (auto i = 0; i < column_max_length.size(); i++) {
+      delimit_line.append(column_max_length.at(i) + 2, '-');
+      delimit_line.append("+");
+    }
+    delimit_line.append("\n");
+
+    // print header
+    out_stream << delimit_line;
+    for (auto i = 0; i < column_max_length.size(); i++) {
+      out_stream << "| " << command.column_name.at(i);
+      out_stream << std::setw(column_max_length.at(i) -
+                              command.column_name.at(i).size() + 1) << " ";
+    }
+    out_stream << "|\n" << delimit_line;
+
+    // print body
+    for (auto tuple_str : out_str) {
+      // print each line
+      for (auto i = 0; i < column_max_length.size(); i++) {
+        out_stream << "| " << tuple_str.at(i);
+        out_stream << std::setw(column_max_length.at(i) -
+                                tuple_str.at(i).size() + 1) << " ";
+      }
+      out_stream << "|\n";
+    }
+
+    // print tail
+    out_stream << delimit_line;
+    out_stream << out_str.size() << " rows in set\n";
+  }
+
+  return out_stream.str();
+}
+
+std::ptrdiff_t TableManager::GetColumnIndex(const std::string& column_name) {
+  auto res = std::find_if(table_schema_.column_list.begin(),
+                          table_schema_.column_list.end(),
+                          [column_name](const sql::CreateTableColumn& arg) {
+                            return arg.column_name == column_name;
+                          });
+  return std::distance(table_schema_.column_list.begin(), res);
 }
 
 }  // namespace internal

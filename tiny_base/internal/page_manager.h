@@ -13,6 +13,7 @@ using CellKey = int32_t;
 using CellKeyRange = std::pair<CellKey, CellKey>;
 using PageIndex = uint32_t;
 using PagePointer = PageIndex;
+using PageRange = std::pair<PageIndex, PageIndex>;
 using PageCell = std::vector<char>;
 
 enum PageType {
@@ -42,9 +43,9 @@ class PageManager {
 
   std::set<CellKey> GetCellKeySet(void) { return key_set_; }
 
-  CellKey GetCellKey(const CellIndex& cell_index);
+  CellKey GetCellKey(const CellIndex& cell_index) const;
 
-  PageCell GetCell(const CellIndex& cell_index);
+  PageCell GetCell(const CellIndex& cell_index) const;
 
   PageIndex GetParent(void) { return parent_; }
 
@@ -77,6 +78,10 @@ class PageManager {
   void InsertCell(const CellKey& primary_key, const PageCell& cell);
 
   void DeleteCell(const CellIndex& cell_index);
+
+  bool FindCell(const CellKey& key, PageCell& cell) const;
+
+  void AppendAllCells(std::vector<PageCell>& tuples) const;
 
   void Clear(void);
 

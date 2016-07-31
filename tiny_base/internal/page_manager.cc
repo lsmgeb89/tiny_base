@@ -62,7 +62,7 @@ CellKeyRange PageManager::GetCellKeyRange(void) {
   return std::make_pair(min_key, max_key);
 }
 
-CellKey PageManager::GetCellKey(const CellIndex& cell_index) {
+CellKey PageManager::GetCellKey(const CellIndex& cell_index) const {
   CellKey key;
   uint8_t offset(0);
   uint8_t length(0);
@@ -81,7 +81,7 @@ CellKey PageManager::GetCellKey(const CellIndex& cell_index) {
   return utils::SwapEndian<decltype(key)>(key);
 }
 
-PageCell PageManager::GetCell(const CellIndex& cell_index) {
+PageCell PageManager::GetCell(const CellIndex& cell_index) const {
   PageCell cell;
   uint16_t cell_size;
 
@@ -99,8 +99,6 @@ PageCell PageManager::GetCell(const CellIndex& cell_index) {
 
   table_file_->Read(page_base_ + cell_pointer_array_[cell_index], cell.data(),
                     cell_size);
-
-  utils::SwapEndianInPlace<decltype(cell)::value_type>(cell);
 
   return cell;
 }
@@ -243,6 +241,21 @@ void PageManager::Reorder(void) {
 
   for (auto cell_pair : cell_list) {
     InsertCell(cell_pair.first, cell_pair.second);
+  }
+}
+
+bool PageManager::FindCell(const CellKey& key, PageCell& cell) const {
+  auto res = key_set_.find(key);
+  bool ret = (res != key_set_.end());
+  if (ret) {
+    cell = GetCell(std::distance(key_set_.begin(), res));
+  }
+  return ret;
+}
+
+void PageManager::AppendAllCells(std::vector<PageCell>& tuples) const {
+  for (auto i = 0; i < cell_num_; i++) {
+    tuples.push_back(GetCell(i));
   }
 }
 

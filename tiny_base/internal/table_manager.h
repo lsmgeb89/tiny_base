@@ -31,6 +31,8 @@ class TableManager {
 
   void InsertInto(const sql::InsertIntoCommand& command);
 
+  const std::string SelectFrom(const sql::SelectFromCommand& command);
+
  private:
   // info for the table
   fs::path file_path_;
@@ -109,7 +111,7 @@ class TableManager {
   }
 
   const CellIndex GetCellLeftPointer(const PageIndex& page_index,
-                           const CellIndex& cell_index) const {
+                                     const CellIndex& cell_index) const {
     return page_list_[page_index].GetCellLeftPointer(cell_index);
   }
 
@@ -144,6 +146,21 @@ class TableManager {
   void UpdateParent(const PageIndex& page_index);
 
   void LoadParent(const PageIndex& page_index);
+
+  bool IsPrimaryKey(const std::string column_name) const {
+    return (column_name == table_schema_.column_list[0].column_name);
+  }
+
+  void PullTupleWithPrimary(const sql::SelectFromCommand& command,
+                            std::vector<PageCell>& tuples);
+
+  void PullTuple(const sql::SelectFromCommand& command,
+                 std::vector<PageCell>& tuples);
+
+  const std::string FilterTuple(const sql::SelectFromCommand& command,
+                                std::vector<PageCell>& tuples);
+
+  std::ptrdiff_t GetColumnIndex(const std::string& column_name);
 };
 
 }  // namespace page

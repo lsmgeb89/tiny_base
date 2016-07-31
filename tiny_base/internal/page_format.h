@@ -41,6 +41,17 @@ constexpr uint8_t table_leaf_rowid_length = 4;
 constexpr uint8_t table_leaf_payload_offset =
     table_leaf_rowid_offset + table_leaf_rowid_length;
 
+constexpr uint8_t table_leaf_payload_num_of_columns_offset =
+    table_leaf_payload_offset;
+
+constexpr uint8_t table_leaf_payload_num_of_columns_length = 1;
+
+constexpr uint8_t table_leaf_payload_type_codes_offset =
+    table_leaf_payload_num_of_columns_offset +
+    table_leaf_payload_num_of_columns_length;
+
+constexpr uint8_t table_leaf_payload_type_code_length = 1;
+
 /* Table B-Tree Interior Cell */
 constexpr uint8_t table_interior_left_pointer_offset = 0x00;
 constexpr uint8_t table_interior_left_pointer_length = 4;

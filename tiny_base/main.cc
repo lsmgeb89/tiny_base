@@ -1,3 +1,7 @@
+#include <chrono>
+#include <iomanip>
+#include <iostream>
+#include "sql_command.h"
 #include "table_manager.h"
 
 int main(int argc, char* argv[]) {
@@ -41,6 +45,9 @@ int main(int argc, char* argv[]) {
   internal::TableManager user_table(user_table_path);
   sql::CreateTableCommand c_1 = {"greek",
                                  {{"greek_id", sql::Int, sql::primary_key},
+                                  {"id_copy", sql::Int, sql::not_null},
+                                  {"real_copy", sql::Double, sql::not_null},
+                                  {"time_copy", sql::DateTime, sql::not_null},
                                   {"letter", sql::Text, sql::not_null}}};
 
   if (!user_table.Exists()) {
@@ -50,25 +57,40 @@ int main(int argc, char* argv[]) {
   }
 
   char base('a');
-  char n_base('A');
   char code;
-#if 0
-  std::vector<uint8_t> index = {4,  3,  9,  2,  5,  6,  7,  8,  10, 11, 12,
-                                13, 14, 15, 16, 17, 18, 19, 20, 21, 1};
-#else
-  std::vector<uint8_t> index = {1, 2, 3, 10, 20, 30, 40, 12, 14, 50, 22, 24, 60, 32, 34, 42, 52, 54, 44, 62, 64, 66, 55, 56, 57, 53};
-#endif
+  std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
+  std::time_t test_time;
+  std::time_t cond_time =
+      std::chrono::system_clock::to_time_t(now - std::chrono::hours(24 * 5));
+  std::vector<uint8_t> index = {1, 2, 7, 8, 6, 10, 12, 14, 9, 11, 13, 3, 5, 4};
+
+  std::cout << std::put_time(std::localtime(&cond_time), "%F %T") << '\n';
 
   for (auto i : index) {
-    if (i > 0) {
-      code = base + i;
-    } else {
-      code = n_base - i;
-    }
+    code = base + i;
+    test_time =
+        std::chrono::system_clock::to_time_t(now - std::chrono::hours(24 * i));
+
+    std::cout << std::to_string(i)
+              << std::put_time(std::localtime(&test_time), ": %F %T") << '\n';
 
     user_table.InsertInto(
-        {"greek", {static_cast<int32_t>(i), std::string(72, code)}});
+        {"greek",
+         {static_cast<int32_t>(i), static_cast<int32_t>(i),
+          static_cast<double>(i), static_cast<uint64_t>(test_time),
+          std::string(88, code)}});
   }
+
+  // test select
+  sql::WhereClause clause = {"greek_id", sql::NotLarger,
+                             static_cast<int32_t>(1)};
+  std::experimental::optional<sql::WhereClause> where =
+      std::experimental::make_optional(clause);
+  sql::SelectFromCommand c_2 = {
+      "greek",
+      {"id_copy", "letter", "time_copy", "real_copy", "greek_id"},
+      where};
+  std::cout << user_table.SelectFrom(c_2);
 
   return 0;
 }
