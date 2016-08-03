@@ -6,8 +6,6 @@
 
 namespace sql {
 
-enum ColumnAttribute { could_null, not_null, primary_key };
-
 static std::vector<uint16_t> DataTypeSize = {1, 2, 4, 8, 1, 2,
                                              4, 8, 4, 8, 8, 8};
 

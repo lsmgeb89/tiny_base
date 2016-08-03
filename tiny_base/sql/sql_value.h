@@ -1,6 +1,7 @@
 #ifndef TINY_BASE_SQL_VALUE_H_
 #define TINY_BASE_SQL_VALUE_H_
 
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 #include <experimental/any>
@@ -26,12 +27,22 @@ enum DataType {
   DateTime = 0x0A,
   Date = 0x0B,
   Text = 0x0C,
-  Invalid = 0xFF
+  InvalidType = 0xFF
 };
 
 using Value = std::experimental::any;
 
-enum OperatorType { Equal, Unequal, Larger, Smaller, NotLarger, NotSmaller };
+enum OperatorType {
+  Equal,
+  Unequal,
+  Larger,
+  Smaller,
+  NotLarger,
+  NotSmaller,
+  InvalidOp
+};
+
+enum ColumnAttribute { primary_key, not_null, could_null };
 
 static const Value BytesToValue(const DataType& type,
                                 const std::vector<char>& bytes) {
@@ -283,6 +294,184 @@ static const bool CompareValue(const Value& lhs, const Value& rhs,
   }
 
   return result;
+}
+
+static const DataType StringToType(const std::string& type_str) {
+  DataType type(InvalidType);
+  std::string converted_str;
+
+  transform(type_str.begin(), type_str.end(), std::back_inserter(converted_str),
+            ::toupper);
+
+  if (type_str == "TINYINT") {
+    type = TinyInt;
+  } else if (type_str == "SMALLINT") {
+    type = SmallInt;
+  } else if (type_str == "INT") {
+    type = Int;
+  } else if (type_str == "BIGINT") {
+    type = BigInt;
+  } else if (type_str == "REAL") {
+    type = Real;
+  } else if (type_str == "DOUBLE") {
+    type = Double;
+  } else if (type_str == "DATETIME") {
+    type = DateTime;
+  } else if (type_str == "DATE") {
+    type = Date;
+  } else if (type_str == "TEXT") {
+    type = Text;
+  }
+
+  return type;
+}
+
+static const std::string TypeToString(const DataType& type) {
+  std::string out_str;
+
+  switch (type) {
+    case OneByteNull:
+      out_str = "NULL";
+      break;
+    case TinyInt:
+      out_str = "TINYINT";
+      break;
+    case TwoByteNull:
+      out_str = "NULL";
+      break;
+    case SmallInt:
+      out_str = "SMALLINT";
+      break;
+    case FourByteNull:
+      out_str = "NULL";
+      break;
+    case Int:
+      out_str = "INT";
+      break;
+    case EightByteNull:
+      out_str = "NULL";
+      break;
+    case BigInt:
+      out_str = "BIGINT";
+      break;
+    case Real:
+      out_str = "REAL";
+      break;
+    case Double:
+      out_str = "DOUBLE";
+      break;
+    case DateTime:
+      out_str = "DATETIME";
+      break;
+    case Date:
+      out_str = "DATE";
+      break;
+    case Text:
+      out_str = "TEXT";
+      break;
+    default:
+      break;
+  }
+
+  return out_str;
+}
+
+static const OperatorType StringToOperator(const std::string& operator_str) {
+  OperatorType compare_operator(InvalidOp);
+
+  if (operator_str == "=") {
+    compare_operator = Equal;
+  } else if (operator_str == "<>") {
+    compare_operator = Unequal;
+  } else if (operator_str == ">") {
+    compare_operator = Larger;
+  } else if (operator_str == "<") {
+    compare_operator = Smaller;
+  } else if (operator_str == "=>") {
+    compare_operator = NotSmaller;
+  } else if (operator_str == "<=") {
+    compare_operator = NotLarger;
+  }
+
+  return compare_operator;
+}
+
+static const Value StringToValue(const std::string& value_str,
+                                 const DataType& type) {
+  Value sql_value;
+
+  switch (type) {
+    case OneByteNull:
+    case TinyInt:
+      sql_value = static_cast<int8_t>(std::stoi(value_str));
+      break;
+    case TwoByteNull:
+    case SmallInt:
+      sql_value = static_cast<int16_t>(std::stoi(value_str));
+      break;
+    case FourByteNull:
+    case Int:
+      sql_value = static_cast<int32_t>(std::stoi(value_str));
+      break;
+    case EightByteNull:
+    case BigInt:
+      sql_value = static_cast<int64_t>(std::stoll(value_str));
+      break;
+    case Real:
+      sql_value = static_cast<float>(std::stof(value_str));
+      break;
+    case Double:
+      sql_value = static_cast<double>(std::stod(value_str));
+      break;
+    case DateTime: {
+      std::tm tm;
+      std::istringstream str_stream(value_str);
+      str_stream >> std::get_time(&tm, "%Y-%m-%d_%T");
+      std::time_t time = std::mktime(&tm);
+      sql_value = static_cast<uint64_t>(time);
+    } break;
+    case Date: {
+      std::tm tm;
+      std::istringstream str_stream(value_str);
+      str_stream >> std::get_time(&tm, "%Y-%m-%d");
+      std::time_t time = std::mktime(&tm);
+      sql_value = static_cast<uint64_t>(time);
+    } break;
+    case Text: {
+      sql_value = value_str;
+    } break;
+    default:
+      break;
+  }
+
+  return sql_value;
+}
+
+inline const std::string AttributeToString(const ColumnAttribute& attribute) {
+  std::string ret;
+  if (attribute == primary_key) {
+    ret = "PRIMARY KEY";
+  } else if (attribute == not_null) {
+    ret = "NOT NULLABLE";
+  } else if (attribute == could_null) {
+    ret = "NULLABLE";
+  }
+
+  return ret;
+}
+
+inline const ColumnAttribute StringToAttribute(const std::string& attr_str) {
+  ColumnAttribute attribute;
+
+  if ("PRIMARY KEY" == attr_str) {
+    attribute = primary_key;
+  } else if ("NOT NULLABLE" == attr_str) {
+    attribute = not_null;
+  } else if ("NULLABLE" == attr_str) {
+    attribute = could_null;
+  }
+
+  return attribute;
 }
 
 }  // namespace sql

@@ -34,7 +34,7 @@ static PageCell GetValue(const PageCell& cell, const std::ptrdiff_t& index) {
 
 static void GetValues(const PageCell& cell,
                       const std::vector<std::ptrdiff_t>& indexes,
-                      std::vector<PageCell> values) {
+                      std::vector<PageCell>& values) {
   PageCell value;
   auto column_num(cell.at(table_leaf_payload_num_of_columns_offset));
   auto offset(table_leaf_payload_type_codes_offset + column_num);
@@ -43,16 +43,18 @@ static void GetValues(const PageCell& cell,
 
   // loop through cell
   for (auto i = 0, j = 0; i < column_num, j < column_num; i++) {
-    if (i != indexes.at(j)) {
-      continue;
-    }
     value_type = cell.at(table_leaf_payload_type_codes_offset + i);
     value_size = sql::DataTypeToSize(value_type);
+    // accumulate offset
+    if (i != indexes.at(j)) {
+      offset += value_size;
+      continue;
+    }
     // get value
     value.clear();
     value.resize(value_size);
     std::copy(cell.begin() + offset, cell.begin() + offset + value_size,
-              std::back_inserter(value));
+              value.begin());
     // swap endian
     std::reverse(value.begin(), value.end());
     values.push_back(value);

@@ -23,25 +23,34 @@ class TableManager {
 
   bool Exists(void) { return fs::exists(file_path_); }
 
-  void Load(const TableSchema& schema, const uint8_t& fanout,
-            const PageIndex& root_page);
+  void Load(const TableSchema& schema, const int32_t& root_page,
+            const int32_t& fanout);
 
-  /* Physically create table and save schema */
   void CreateTable(const sql::CreateTableCommand& command);
 
   void InsertInto(const sql::InsertIntoCommand& command);
 
-  const std::string SelectFrom(const sql::SelectFromCommand& command);
+  const std::pair<int32_t, std::string> SelectFrom(
+      const sql::SelectFromCommand& command);
+
+  const std::vector<sql::ValueList> InternalSelectFrom(
+      const sql::SelectFromCommand& command);
+
+  bool IsColumnValid(const std::string& column_name);
+
+  sql::DataType GetColumnType(const std::string& column_name);
+
+  sql::DataType GetColumnType(const std::size_t& column_index);
 
  private:
   // info for the table
   fs::path file_path_;
-  PageIndex root_page_;
+  int32_t root_page_;
   uint32_t page_num_;
   std::vector<PageManager> page_list_;
 
   // B plus tree
-  uint8_t fanout_;
+  int32_t fanout_;
 
   // tool
   utils::FileHandle table_file_;
@@ -157,8 +166,11 @@ class TableManager {
   void PullTuple(const sql::SelectFromCommand& command,
                  std::vector<PageCell>& tuples);
 
-  const std::string FilterTuple(const sql::SelectFromCommand& command,
-                                std::vector<PageCell>& tuples);
+  const std::pair<int32_t, std::string> FilterTuple(
+      const sql::SelectFromCommand& command, std::vector<PageCell>& tuples);
+
+  const std::vector<sql::ValueList> InternalFilterTuple(
+      const sql::SelectFromCommand& command, std::vector<PageCell>& tuples);
 
   std::ptrdiff_t GetColumnIndex(const std::string& column_name);
 };

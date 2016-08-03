@@ -6,6 +6,7 @@ add_executable(tiny_base
                main.cc
                internal/table_manager.cc
                internal/page_manager.cc
+               sql/database_engine.cc
                utils/file_util.cc)
 
 target_include_directories(tiny_base PRIVATE internal sql utils)
