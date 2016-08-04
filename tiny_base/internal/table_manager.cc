@@ -169,8 +169,11 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
       case sql::Date: {
         uint64_t value_date =
             sql::expr::any_cast<uint64_t>(command.value_list.at(i));
+        std::cout << "PrepareLeafCell: "
+                  << " value_date: " << value_date;
         value_date = utils::SwapEndian<decltype(value_date)>(value_date);
         std::memcpy(table_leaf_cell.data() + offset, &value_date, type_size);
+        std::cout << " value_date(swapped): " << value_date << std::endl;
       } break;
       default:
         break;
@@ -824,6 +827,47 @@ const std::vector<sql::TypeValueList> TableManager::InternalFilterTuple(
   }
 
   return out_tuples;
+}
+
+const std::string TableManager::UpdateSet(
+    const sql::UpdateSetCommand& command) {
+  bool result(false);
+  std::size_t count(0);
+  PageCell target_cell;
+
+  // pinpoint cell
+  int32_t condition_value = sql::expr::any_cast<int32_t>(command.where.value);
+  PageIndex target_page(SearchPage(root_page_, condition_value));
+  result = page_list_.at(target_page).FindCell(condition_value, target_cell);
+
+  // could not find, just return
+  if (!result) {
+    count = 0;
+    goto done;
+  }
+
+  // update value in column one by one
+  for (auto set_clause : command.set_list) {
+    result = UpdateValue(target_cell, GetColumnIndex(set_clause.column_name),
+                         set_clause.type_code, set_clause.value);
+    if (result) {
+      count++;
+    }
+  }
+
+  // write back to disk
+  result = page_list_.at(target_page).UpdateCell(condition_value, target_cell);
+
+  if (!result) {
+    count = 0;
+  }
+
+done:
+  if (!count) {
+    return "0 record updated\n";
+  } else {
+    return "1 record (" + std::to_string(count) + " column(s)) updated\n";
+  }
 }
 
 std::ptrdiff_t TableManager::GetColumnIndex(const std::string& column_name) {

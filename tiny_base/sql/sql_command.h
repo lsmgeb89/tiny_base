@@ -41,6 +41,18 @@ struct SelectFromCommand {
   std::experimental::optional<WhereClause> where;
 };
 
+struct SetClause {
+  std::string column_name;
+  TypeCode type_code;
+  Value value;
+};
+
+struct UpdateSetCommand {
+  std::string table_name;
+  std::vector<SetClause> set_list;
+  WhereClause where;
+};
+
 }  // namespace sql
 
 #endif  // TINY_BASE_SQL_COMMAND_H_

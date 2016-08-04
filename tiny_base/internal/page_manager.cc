@@ -120,7 +120,7 @@ PagePointer PageManager::GetCellLeftPointer(const CellIndex& cell_index) const {
 PageIndex PageManager::GetLeftMostPagePointer(void) {
   PageIndex page_pointer;
 
-  if (IndexLeafCell == page_type_ || TableLeafCell == page_type_) {
+  if (TableLeafCell == page_type_) {
     // TODO: throw exception
   }
 
@@ -257,6 +257,19 @@ void PageManager::AppendAllCells(std::vector<PageCell>& tuples) const {
   for (auto i = 0; i < cell_num_; i++) {
     tuples.push_back(GetCell(i));
   }
+}
+
+bool PageManager::UpdateCell(const CellKey& key, const PageCell& cell) {
+  CellIndex cell_index(0);
+  auto res = key_set_.find(key);
+  bool ret = (res != key_set_.end());
+  if (ret) {
+    cell_index = std::distance(key_set_.begin(), res);
+    table_file_->Write(page_base_ + cell_pointer_array_[cell_index],
+                       cell.data(), cell.size());
+  }
+
+  return ret;
 }
 
 }  // namespace internal

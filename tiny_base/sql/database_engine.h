@@ -30,13 +30,16 @@ class DatabaseEngine {
                               InsertIntoCommand& command);
   bool ParseSelectFromCommand(const std::string& sql_command,
                               SelectFromCommand& command);
-  bool ParseShowTable(const std::string& sql_command);
+  bool ParseShowTableCommand(const std::string& sql_command);
+  bool ParseUpdateSetCommand(const std::string& sql_command,
+                             UpdateSetCommand& command);
 
   // Executor
   bool ExecuteCreateTableCommand(const CreateTableCommand& command);
   void ExecuteInsertIntoCommand(const InsertIntoCommand& command);
   void ExecuteSelectFromCommand(const SelectFromCommand& command);
   void ExecuteShowTablesCommand(void);
+  void ExecuteUpdateSetCommand(const UpdateSetCommand& command);
 
   // Manage table
   void RegisterTable(const CreateTableCommand& table_schema);

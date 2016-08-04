@@ -18,9 +18,7 @@ using PageCell = std::vector<char>;
 
 enum PageType {
   InvalidCell = 0x00,
-  IndexInteriorCell = 0x02,
   TableInteriorCell = 0x05,
-  IndexLeafCell = 0x0a,
   TableLeafCell = 0x0d
 };
 
@@ -80,6 +78,8 @@ class PageManager {
   void DeleteCell(const CellIndex& cell_index);
 
   bool FindCell(const CellKey& key, PageCell& cell) const;
+
+  bool UpdateCell(const CellKey& key, const PageCell& cell);
 
   void AppendAllCells(std::vector<PageCell>& tuples) const;
 

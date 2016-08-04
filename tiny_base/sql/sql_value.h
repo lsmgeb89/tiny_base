@@ -5,6 +5,7 @@
 #include <cstring>
 #include <ctime>
 #include <experimental/any>
+#include <iostream>
 #include <iomanip>
 #include <string>
 #include <vector>
@@ -127,6 +128,62 @@ static const Value BytesToValue(const TypeCode& type_code,
   return to_value;
 }
 
+static void ValueToBytes(const TypeCode& type_code, const Value& value,
+                         std::vector<char>& bytes) {
+  // book space
+  uint16_t size = TypeCodeToSize(type_code);
+  bytes.resize(size);
+
+  switch (type_code) {
+    case OneByteNull:
+    case TinyInt: {
+      int8_t value_8 = expr::any_cast<int8_t>(value);
+      std::memcpy(bytes.data(), &value_8, size);
+    } break;
+    case TwoByteNull:
+    case SmallInt: {
+      int16_t value_16 = expr::any_cast<int16_t>(value);
+      std::memcpy(bytes.data(), &value_16, size);
+    } break;
+    case FourByteNull:
+    case Int: {
+      int32_t value_32 = expr::any_cast<int32_t>(value);
+      std::memcpy(bytes.data(), &value_32, size);
+    } break;
+    case EightByteNull:
+    case BigInt: {
+      int64_t value_64 = expr::any_cast<int64_t>(value);
+      std::memcpy(bytes.data(), &value_64, size);
+    } break;
+    case Real: {
+      float value_float = expr::any_cast<float>(value);
+      std::memcpy(bytes.data(), &value_float, size);
+    } break;
+    case Double: {
+      double value_double = expr::any_cast<double>(value);
+      std::memcpy(bytes.data(), &value_double, size);
+    } break;
+    case DateTime: {
+      uint64_t value_date_time = expr::any_cast<uint64_t>(value);
+      std::memcpy(bytes.data(), &value_date_time, size);
+    } break;
+    case Date: {
+      uint64_t value_date = expr::any_cast<uint64_t>(value);
+      std::memcpy(bytes.data(), &value_date, size);
+      std::cout << "ValueToBytes: value_date: " << value_date
+                << " size: " << size << std::endl;
+    } break;
+    default:
+      break;
+  }
+
+  // contain empty string for NULL
+  if (type_code >= Text) {
+    std::string value_str = expr::any_cast<std::string>(value);
+    std::copy(value_str.begin(), value_str.end(), bytes.begin());
+  }
+}
+
 static const std::string BytesToString(const TypeCode& type_code,
                                        const std::vector<char>& bytes) {
   std::string res_str;
@@ -180,6 +237,8 @@ static const std::string BytesToString(const TypeCode& type_code,
       uint64_t value_date;
       std::memcpy(&value_date, bytes.data(), sizeof(value_date));
       std::time_t date(value_date);
+      std::cout << "BytesToString: value_date: " << value_date
+                << " time_t: " << date << std::endl;
       std::stringstream str_stream;
       str_stream << std::put_time(std::gmtime(&date), "%F");
       res_str = str_stream.str();
@@ -462,6 +521,8 @@ static const Value StringToValue(const std::string& value_str,
       str_stream >> std::get_time(&tm, "%Y-%m-%d");
       std::time_t time = std::mktime(&tm);
       sql_value = static_cast<uint64_t>(time);
+      std::cout << "StringToValue: " << value_str << " time_t: " << time
+                << std::endl;
     } break;
     default:
       break;

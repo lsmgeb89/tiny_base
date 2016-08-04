@@ -64,6 +64,62 @@ static void GetValues(const PageCell& cell,
   }
 }
 
+static bool UpdateValue(PageCell& cell, const std::ptrdiff_t& index,
+                        const sql::TypeCode& type_code,
+                        const sql::Value& value) {
+  PageCell value_bytes;
+  sql::TypeCode old_type_code(
+      cell.at(table_leaf_payload_type_codes_offset + index));
+  auto old_type_size(sql::TypeCodeToSize(old_type_code));
+  auto new_type_size(sql::TypeCodeToSize(type_code));
+
+  if (old_type_size < new_type_size) {
+    return false;
+  }
+
+  auto column_num(cell.at(table_leaf_payload_num_of_columns_offset));
+  auto offset(table_leaf_payload_type_codes_offset + column_num);
+
+  // calc offset
+  for (auto i = 0; i < index; i++) {
+    auto type_code = cell.at(table_leaf_payload_type_codes_offset + i);
+    auto size = sql::TypeCodeToSize(type_code);
+    offset += size;
+  }
+
+  // modify type code
+  cell.at(table_leaf_payload_type_codes_offset + index) = type_code;
+
+  // prepare value
+  sql::ValueToBytes(type_code, value, value_bytes);
+
+  // swap endian
+  std::reverse(value_bytes.begin(), value_bytes.end());
+
+  if (old_type_size == new_type_size) {
+    // directly modify value bytes
+    std::memcpy(cell.data() + offset, value_bytes.data(), value_bytes.size());
+  } else if (old_type_size > new_type_size) {
+    // store remaining part to a temp buffer
+    PageCell temp_cell;
+    temp_cell.resize(cell.size() - offset - old_type_size);
+    std::copy(cell.begin() + offset + old_type_size, cell.end(),
+              temp_cell.begin());
+
+    // copy new value (new_type_size == value_bytes.size())
+    std::copy(value_bytes.begin(), value_bytes.end(), cell.begin() + offset);
+
+    // copy back remaining part
+    std::copy(temp_cell.begin(), temp_cell.end(),
+              cell.begin() + offset + new_type_size);
+
+    // shrink
+    cell.resize(cell.size() - (old_type_size - new_type_size));
+  }
+
+  return true;
+}
+
 static sql::TypeCode GetTypeCode(const PageCell& cell,
                                  const std::ptrdiff_t& index) {
   return cell.at(table_leaf_payload_type_codes_offset + index);

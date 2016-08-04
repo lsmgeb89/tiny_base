@@ -36,6 +36,8 @@ class TableManager {
   const std::vector<sql::TypeValueList> InternalSelectFrom(
       const sql::SelectFromCommand& command);
 
+  const std::string UpdateSet(const sql::UpdateSetCommand& command);
+
   bool IsColumnValid(const std::string& column_name);
 
   sql::SchemaDataType GetColumnType(const std::string& column_name);

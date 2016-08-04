@@ -93,6 +93,7 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
   CreateTableCommand create_command;
   InsertIntoCommand insert_command;
   SelectFromCommand select_command;
+  UpdateSetCommand update_command;
 
   // get first keyword
   result = ExtractStr(sql_command, "\\s*(\\w+).*", token);
@@ -122,11 +123,17 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
     }
     ExecuteSelectFromCommand(select_command);
   } else if (keyword == "SHOW") {
-    result = ParseShowTable(sql_command);
+    result = ParseShowTableCommand(sql_command);
     if (!result) {
       goto done;
     }
     ExecuteShowTablesCommand();
+  } else if (keyword == "UPDATE") {
+    result = ParseUpdateSetCommand(sql_command, update_command);
+    if (!result) {
+      goto done;
+    }
+    ExecuteUpdateSetCommand(update_command);
   } else if (keyword == "EXIT") {
     exit = true;
   }
@@ -382,11 +389,116 @@ done:
   return result;
 }
 
-bool DatabaseEngine::ParseShowTable(const std::string& sql_command) {
+bool DatabaseEngine::ParseShowTableCommand(const std::string& sql_command) {
   bool result(false);
   std::vector<std::string> token;
   result = ExtractStr(sql_command, "\\s*SHOW\\s*TABLES\\s*", token);
   return (result && token.empty());
+}
+
+bool DatabaseEngine::ParseUpdateSetCommand(const std::string& sql_command,
+                                           UpdateSetCommand& command) {
+  bool result(false);
+  std::string temp;
+  fs::path file_path;
+  TypeCode type_code;
+  Value sql_value;
+  std::vector<std::string> condition_str;
+  std::vector<std::string> token;
+  std::vector<std::string> set_clause;
+  internal::TableManager* table(nullptr);
+
+  result = ExtractStr(sql_command,
+                      "\\s*UPDATE\\s*([\\.\\w_-]+)\\s*SET\\s*(.+)\\s*WHERE\\s*("
+                      "[\\.\\w_-]+)\\s*=(.+)",
+                      token);
+  if (!result || token.size() != 4) {
+    goto done;
+  }
+
+  // check table name
+  command.table_name = token.front();
+  if (database_tables_.find(command.table_name) == database_tables_.end()) {
+    // check file
+    file_path = "data/" + command.table_name + ".tbl";
+    if (fs::exists(file_path)) {
+      table = LoadTable(command.table_name);
+    } else {
+      goto done;
+    }
+  } else {
+    table = &(database_tables_.at(command.table_name));
+  }
+
+  // check column name
+  if (!table->IsColumnValid(token.at(2))) {
+    goto done;
+  }
+
+  if (table->GetColumnType(token.at(2)) == Text) {
+    auto str_begin(token.at(3).find_first_of('\''));
+    auto str_end(token.at(3).find_last_of('\''));
+    if (str_begin == std::string::npos || str_end == std::string::npos) {
+      goto done;
+    }
+    condition_str.clear();
+    condition_str.push_back(
+        token.at(3).substr(str_begin + 1, str_end - str_begin - 1));
+  } else {
+    result = ExtractStr(token.at(3), "\\s*([\\w-_\\.]+)\\s*", condition_str);
+    if (!result || condition_str.size() != 1) {
+      goto done;
+    }
+  }
+
+  // convert value
+  type_code = DataTypeToTypeCode(table->GetColumnType(token.at(2)),
+                                 condition_str.front());
+  sql_value = StringToValue(condition_str.front(), type_code);
+
+  // save whole where clause
+  command.where = {token.at(2), Equal, type_code, sql_value};
+
+  // split column
+  temp = token.at(1);
+  SplitStr(temp, ',', token);
+
+  // set clause
+  for (auto i = 0; i < token.size(); i++) {
+    result = ExtractStr(token.at(i), "\\s*([\\.\\w_-]+)\\s*=(.+)", set_clause);
+    if (!result || set_clause.size() != 2 ||
+        !table->IsColumnValid(set_clause.front())) {
+      goto done;
+    }
+
+    // first try string
+    if (table->GetColumnType(set_clause.at(0)) == Text) {
+      auto str_begin(set_clause.at(1).find_first_of('\''));
+      auto str_end(set_clause.at(1).find_last_of('\''));
+      if (str_begin == std::string::npos || str_end == std::string::npos) {
+        goto done;
+      }
+      condition_str.clear();
+      condition_str.push_back(
+          set_clause.at(1).substr(str_begin + 1, str_end - str_begin - 1));
+    } else {
+      result =
+          ExtractStr(set_clause.at(1), "\\s*([\\w-_\\.]+)\\s*", condition_str);
+      if (!result || condition_str.size() != 1) {
+        goto done;
+      }
+    }
+
+    // convert value
+    type_code = DataTypeToTypeCode(table->GetColumnType(set_clause.front()),
+                                   condition_str.front());
+    sql_value = StringToValue(condition_str.front(), type_code);
+
+    command.set_list.push_back({set_clause.front(), type_code, sql_value});
+  }
+
+done:
+  return result;
 }
 
 bool DatabaseEngine::ExecuteCreateTableCommand(
@@ -424,6 +536,11 @@ void DatabaseEngine::ExecuteSelectFromCommand(
 void DatabaseEngine::ExecuteShowTablesCommand(void) {
   SelectFromCommand show_tables = {"tinybase_tables", {"table_name"}};
   ExecuteSelectFromCommand(show_tables);
+}
+
+void DatabaseEngine::ExecuteUpdateSetCommand(const UpdateSetCommand& command) {
+  std::cout << database_tables_.at(command.table_name).UpdateSet(command)
+            << std::flush;
 }
 
 void DatabaseEngine::SplitStr(const std::string& target_str, const char delimit,
