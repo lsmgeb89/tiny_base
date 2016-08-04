@@ -21,7 +21,8 @@ const CreateTableCommand DatabaseEngine::root_schema_columns = {
      {"column_name", Text, not_null},
      {"data_type", Text, not_null},
      {"ordinal_position", TinyInt, not_null},
-     {"attribute", Text, not_null}}};
+     {"is_nullable", Text, not_null},
+     {"column_key", Text, could_null}}};
 
 DatabaseEngine::DatabaseEngine(void) {
   internal::TableManager* tables_manager = nullptr;
@@ -139,7 +140,7 @@ bool DatabaseEngine::ParseCreateTableCommand(const std::string& sql_command,
   bool result(false);
   bool is_nullable(false);
   std::string temp;
-  DataType type;
+  SchemaDataType type;
   CreateTableColumn column;
   std::vector<std::string> token;
   std::vector<std::string> columns;
@@ -191,7 +192,7 @@ bool DatabaseEngine::ParseCreateTableCommand(const std::string& sql_command,
     }
 
     // check type
-    type = StringToType(columns.at(1));
+    type = StringToSchemaDataType(columns.at(1));
     if (type == InvalidType) {
       goto done;
     }
@@ -209,6 +210,7 @@ bool DatabaseEngine::ParseInsertIntoCommand(const std::string& sql_command,
                                             InsertIntoCommand& command) {
   bool result(false);
   std::string temp;
+  TypeCode type_code;
   Value sql_value;
   fs::path file_path;
   internal::TableManager* table(nullptr);
@@ -247,12 +249,26 @@ bool DatabaseEngine::ParseInsertIntoCommand(const std::string& sql_command,
 
   // check value
   for (auto i = 0; i < token.size(); i++) {
-    result = ExtractStr(token.at(i), "\\s*([\\w-\\.]+)\\s*", values);
-    if (!result || values.size() != 1) {
-      goto done;
+    // string type
+    if (table->GetColumnType(i) == Text) {
+      auto str_begin(token.at(i).find_first_of('\''));
+      auto str_end(token.at(i).find_last_of('\''));
+      if (str_begin == std::string::npos || str_end == std::string::npos) {
+        goto done;
+      }
+      values.clear();
+      values.push_back(
+          token.at(i).substr(str_begin + 1, str_end - str_begin - 1));
+    } else {
+      result = ExtractStr(token.at(i), "\\s*([\\w-_\\.]+)\\s*", values);
+      if (!result || values.size() != 1) {
+        goto done;
+      }
     }
 
-    sql_value = StringToValue(values.front(), table->GetColumnType(i));
+    type_code = DataTypeToTypeCode(table->GetColumnType(i), values.front());
+    command.type_list.push_back(type_code);
+    sql_value = StringToValue(values.front(), type_code);
     command.value_list.push_back(sql_value);
   }
 
@@ -267,8 +283,10 @@ bool DatabaseEngine::ParseSelectFromCommand(const std::string& sql_command,
   std::string temp;
   fs::path file_path;
   OperatorType op;
+  TypeCode type_code;
   Value sql_value;
   WhereClause clause;
+  std::vector<std::string> condition_str;
   std::vector<std::string> token;
   std::vector<std::string> columns;
   internal::TableManager* table(nullptr);
@@ -276,7 +294,7 @@ bool DatabaseEngine::ParseSelectFromCommand(const std::string& sql_command,
   // separate them
   result = ExtractStr(sql_command,
                       "\\s*SELECT\\s*(.*?)\\s*FROM\\s*(\\w+)\\s*WHERE\\s*(\\w+)"
-                      "\\s*([>=<]{1,2})\\s*([\\w']+)\\s*;",
+                      "\\s*([>=<]{1,2})(.+)",
                       token);
   if (!result || token.size() != 5) {
     result = ExtractStr(sql_command,
@@ -316,11 +334,28 @@ bool DatabaseEngine::ParseSelectFromCommand(const std::string& sql_command,
       goto done;
     }
 
+    if (table->GetColumnType(token.at(2)) == Text) {
+      auto str_begin(token.at(4).find_first_of('\''));
+      auto str_end(token.at(4).find_last_of('\''));
+      if (str_begin == std::string::npos || str_end == std::string::npos) {
+        goto done;
+      }
+      condition_str.push_back(
+          token.at(4).substr(str_begin + 1, str_end - str_begin - 1));
+    } else {
+      result = ExtractStr(token.at(4), "\\s*([\\w-_\\.]+)\\s*", condition_str);
+      if (!result || condition_str.size() != 1) {
+        goto done;
+      }
+    }
+
     // convert value
-    sql_value = StringToValue(token.at(4), table->GetColumnType(token.at(2)));
+    type_code = DataTypeToTypeCode(table->GetColumnType(token.at(2)),
+                                   condition_str.front());
+    sql_value = StringToValue(condition_str.front(), type_code);
 
     // save whole where clause
-    clause = {token.at(2), op, sql_value};
+    clause = {token.at(2), op, type_code, sql_value};
     command.where = std::experimental::make_optional(clause);
   }
 
@@ -443,19 +478,32 @@ void DatabaseEngine::RegisterTable(const CreateTableCommand& table_schema) {
   // tables
   insert_tables = {
       "tinybase_tables",
+      {Int, static_cast<TypeCode>(Text + table_schema.table_name.size()), Int,
+       Int},
       {++tables_row_id, table_schema.table_name, static_cast<int32_t>(0),
        static_cast<int32_t>(std::numeric_limits<int32_t>::max())}};
   database_tables_.at(insert_tables.table_name).InsertInto(insert_tables);
 
   // columns
+  std::string table_name;
+  std::string column_name;
+  std::string data_type;
+  std::string column_key;
+  std::string is_nullable;
   for (auto i = 0; i < table_schema.column_list.size(); i++) {
-    insert_columns = {
-        "tinybase_columns",
-        {++columns_row_id, table_schema.table_name,
-         table_schema.column_list.at(i).column_name,
-         TypeToString(table_schema.column_list.at(i).type),
-         static_cast<int8_t>(i + 1),
-         AttributeToString(table_schema.column_list.at(i).attribute)}};
+    table_name = table_schema.table_name;
+    column_name = table_schema.column_list.at(i).column_name;
+    data_type = DataTypeToString(table_schema.column_list.at(i).type);
+    column_key = IsAttributePrimary(table_schema.column_list.at(i).attribute);
+    is_nullable = IsAttributeNullable(table_schema.column_list.at(i).attribute);
+    insert_columns = {"tinybase_columns",
+                      {Int, static_cast<TypeCode>(Text + table_name.size()),
+                       static_cast<TypeCode>(Text + column_name.size()),
+                       static_cast<TypeCode>(Text + data_type.size()), TinyInt,
+                       static_cast<TypeCode>(Text + is_nullable.size()),
+                       static_cast<TypeCode>(Text + column_key.size())},
+                      {++columns_row_id, table_name, column_name, data_type,
+                       static_cast<int8_t>(i + 1), is_nullable, column_key}};
     database_tables_.at(insert_columns.table_name).InsertInto(insert_columns);
   }
 }
@@ -477,10 +525,12 @@ internal::TableManager* DatabaseEngine::LoadTable(
 const std::pair<int32_t, int32_t> DatabaseEngine::LoadTableInfo(
     const std::string& table_name) {
   sql::CreateTableCommand table_schema;
-  std::vector<sql::ValueList> tables_query_result;
+  std::vector<sql::TypeValueList> tables_query_result;
 
   // query info from root tables
-  WhereClause where_condition = {"table_name", Equal, table_name};
+  WhereClause where_condition = {
+      "table_name", Equal, static_cast<TypeCode>(Text + table_name.size()),
+      table_name};
   SelectFromCommand query_tables_info = {
       "tinybase_tables",
       {"*"},
@@ -501,10 +551,12 @@ const std::pair<int32_t, int32_t> DatabaseEngine::LoadTableInfo(
 const CreateTableCommand DatabaseEngine::LoadSchema(
     const std::string& table_name) {
   sql::CreateTableCommand table_schema;
-  std::vector<sql::ValueList> columns_query_result;
+  std::vector<sql::TypeValueList> columns_query_result;
 
   // query info from root tables
-  WhereClause where_condition = {"table_name", Equal, table_name};
+  WhereClause where_condition = {
+      "table_name", Equal, static_cast<TypeCode>(Text + table_name.size()),
+      table_name};
   SelectFromCommand query_columns_schema = {
       "tinybase_columns",
       {"*"},
@@ -516,11 +568,20 @@ const CreateTableCommand DatabaseEngine::LoadSchema(
   // form schema
   table_schema.table_name = table_name;
   CreateTableColumn column;
+  std::string attribute;
   for (auto tuple : columns_query_result) {
-    column.column_name = expr::any_cast<std::string>(tuple.at(2));
-    column.type = StringToType(expr::any_cast<std::string>(tuple.at(3)));
-    column.attribute =
-        StringToAttribute(expr::any_cast<std::string>(tuple.at(5)));
+    column.column_name = expr::any_cast<std::string>(tuple.at(2).second);
+    column.type =
+        StringToSchemaDataType(expr::any_cast<std::string>(tuple.at(3).second));
+    // first check column_key
+    attribute = expr::any_cast<std::string>(tuple.at(6).second);
+    if (attribute == "PRI") {
+      column.attribute = primary_key;
+    } else {
+      // second check is_nullable
+      attribute = expr::any_cast<std::string>(tuple.at(5).second);
+      column.attribute = (attribute == "YES") ? not_null : could_null;
+    }
     table_schema.column_list.push_back(column);
   }
 

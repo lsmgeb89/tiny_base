@@ -54,7 +54,7 @@ const std::pair<int32_t, std::string> TableManager::SelectFrom(
   return FilterTuple(command, tuples);
 }
 
-const std::vector<sql::ValueList> TableManager::InternalSelectFrom(
+const std::vector<sql::TypeValueList> TableManager::InternalSelectFrom(
     const sql::SelectFromCommand& command) {
   std::vector<PageCell> tuples;
 
@@ -89,10 +89,6 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
   PrimaryKey primary_key(0);
   PageCell table_leaf_cell;
 
-  if (table_schema_.column_list.size() != command.value_list.size()) {
-    // TODO: error handling
-  }
-
   primary_key = GetPrimaryKey(command);
   primary_key = utils::SwapEndian<decltype(primary_key)>(primary_key);
 
@@ -110,24 +106,20 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
   table_leaf_cell.at(offset) = number_of_columns;
   offset += table_leaf_payload_num_of_columns_length;
 
-  uint8_t type_code(0);
   table_leaf_cell.resize(table_leaf_cell.size() +
                          table_leaf_payload_type_code_length *
                              number_of_columns);
-  for (auto i = 0; i < number_of_columns; i++) {
-    type_code = table_schema_.column_list.at(i).type;
+  for (auto type_code : command.type_list) {
     table_leaf_cell.at(offset) = type_code;
     offset += table_leaf_payload_type_code_length;
   }
 
   // payload body
   for (auto i = 0; i < number_of_columns; i++) {
-    if (table_schema_.column_list[i].type != sql::Text) {
-      type_size = sql::DataTypeSize[table_schema_.column_list[i].type];
-      table_leaf_cell.resize(table_leaf_cell.size() + type_size);
-    }
+    type_size = sql::TypeCodeToSize(command.type_list.at(i));
+    table_leaf_cell.resize(table_leaf_cell.size() + type_size);
 
-    switch (table_schema_.column_list[i].type) {
+    switch (command.type_list.at(i)) {
       case sql::OneByteNull:
       case sql::TinyInt:
         table_leaf_cell[offset] =
@@ -180,21 +172,16 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
         value_date = utils::SwapEndian<decltype(value_date)>(value_date);
         std::memcpy(table_leaf_cell.data() + offset, &value_date, type_size);
       } break;
-      case sql::Text: {
-        std::string value_str =
-            std::experimental::any_cast<std::string>(command.value_list[i]);
-        type_size = value_str.size();
-        table_leaf_cell.resize(table_leaf_cell.size() + type_size);
-        std::reverse(value_str.begin(), value_str.end());
-        std::copy(value_str.begin(), value_str.end(),
-                  table_leaf_cell.data() + offset);
-
-        // update real type for string
-        table_leaf_cell.at(table_leaf_payload_type_codes_offset + i) =
-            sql::Text + type_size;
-      } break;
       default:
         break;
+    }
+
+    if (command.type_list.at(i) >= sql::Text) {
+      std::string value_str =
+          std::experimental::any_cast<std::string>(command.value_list[i]);
+      std::reverse(value_str.begin(), value_str.end());
+      std::copy(value_str.begin(), value_str.end(),
+                table_leaf_cell.data() + offset);
     }
 
     offset += type_size;
@@ -630,7 +617,6 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
   bool select_star(false);
   // gather type info
   std::vector<std::ptrdiff_t> column_indexes;
-  std::vector<sql::DataType> column_types;
   std::vector<std::size_t> column_max_length;
 
   // SELECT *
@@ -638,7 +624,6 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
     select_star = true;
     for (auto i = 0; i < table_schema_.column_list.size(); i++) {
       column_indexes.push_back(i);
-      column_types.push_back(table_schema_.column_list.at(i).type);
       column_max_length.push_back(
           table_schema_.column_list.at(i).column_name.size());
     }
@@ -646,21 +631,19 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
     for (auto name : command.column_name) {
       auto index(GetColumnIndex(name));
       column_indexes.push_back(index);
-      column_types.push_back(table_schema_.column_list.at(index).type);
       column_max_length.push_back(name.size());
     }
   }
 
   std::ptrdiff_t cond_var_type_index(0);
-  sql::DataType cond_var_type(sql::InvalidType);
   if (command.where) {
     cond_var_type_index = GetColumnIndex(command.where->column_name);
-    cond_var_type = table_schema_.column_list.at(cond_var_type_index).type;
   }
 
   // core loop
   bool expr_res;
   PageCell value;
+  sql::TypeCode type_code;
   sql::Value lhs;
   std::vector<std::vector<std::string>> out_str;
   auto iter = tuples.begin();
@@ -668,8 +651,10 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
     // apply condition
     if (command.where) {
       value = GetValue(*iter, cond_var_type_index);
-      lhs = sql::BytesToValue(cond_var_type, value);
-      expr_res = sql::CompareValue(lhs, command.where->value, cond_var_type,
+      type_code = GetTypeCode(*iter, cond_var_type_index);
+      lhs = sql::BytesToValue(type_code, value);
+      expr_res = sql::CompareValue(lhs, command.where->value, type_code,
+                                   command.where->type_code,
                                    command.where->condition_operator);
 
       if (!expr_res) {
@@ -682,10 +667,12 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
     std::vector<std::string> tuple_str;
     if (select_star) {
       std::vector<PageCell> values;
+      std::vector<sql::TypeCode> type_codes;
       GetValues(*iter, column_indexes, values);
+      GetTypeCodes(*iter, column_indexes, type_codes);
       for (auto i = 0; i < values.size(); i++) {
         std::string value_str =
-            sql::BytesToString(column_types.at(i), values.at(i));
+            sql::BytesToString(type_codes.at(i), values.at(i));
         tuple_str.push_back(value_str);
         if (column_max_length.at(i) < value_str.size()) {
           column_max_length.at(i) = value_str.size();
@@ -694,7 +681,8 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
     } else {
       for (auto i = 0; i < column_indexes.size(); i++) {
         value = GetValue(*iter, column_indexes.at(i));
-        std::string value_str = sql::BytesToString(column_types.at(i), value);
+        type_code = GetTypeCode(*iter, column_indexes.at(i));
+        std::string value_str = sql::BytesToString(type_code, value);
         tuple_str.push_back(value_str);
         if (column_max_length.at(i) < value_str.size()) {
           column_max_length.at(i) = value_str.size();
@@ -712,7 +700,7 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
   uint64_t result_row_num(out_str.size());
 
   if (out_str.empty()) {
-    out_stream << "Empty set";
+    out_stream << "Empty set\n";
   } else {
     // form delimited line
     std::string delimit_line("+");
@@ -727,14 +715,16 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
     if (select_star) {
       for (auto i = 0; i < column_max_length.size(); i++) {
         out_stream << "| " << table_schema_.column_list.at(i).column_name;
-        out_stream << std::setw(column_max_length.at(i) -
-        table_schema_.column_list.at(i).column_name.size() + 1) << " ";
+        out_stream << std::setw(
+                          column_max_length.at(i) -
+                          table_schema_.column_list.at(i).column_name.size() +
+                          1) << " ";
       }
     } else {
       for (auto i = 0; i < column_max_length.size(); i++) {
         out_stream << "| " << command.column_name.at(i);
         out_stream << std::setw(column_max_length.at(i) -
-        command.column_name.at(i).size() + 1) << " ";
+                                command.column_name.at(i).size() + 1) << " ";
       }
     }
     out_stream << "|\n" << delimit_line;
@@ -758,47 +748,45 @@ const std::pair<int32_t, std::string> TableManager::FilterTuple(
   return std::make_pair(result_row_num, out_stream.str());
 }
 
-const std::vector<sql::ValueList> TableManager::InternalFilterTuple(
+const std::vector<sql::TypeValueList> TableManager::InternalFilterTuple(
     const sql::SelectFromCommand& command, std::vector<PageCell>& tuples) {
   bool select_star(false);
   // gather type info
   std::vector<std::ptrdiff_t> column_indexes;
-  std::vector<sql::DataType> column_types;
 
   // SELECT *
   if (command.column_name.size() == 1 && command.column_name.front() == "*") {
     select_star = true;
     for (auto i = 0; i < table_schema_.column_list.size(); i++) {
       column_indexes.push_back(i);
-      column_types.push_back(table_schema_.column_list.at(i).type);
     }
   } else {
     for (auto name : command.column_name) {
       auto index(GetColumnIndex(name));
       column_indexes.push_back(index);
-      column_types.push_back(table_schema_.column_list.at(index).type);
     }
   }
 
   std::ptrdiff_t cond_var_type_index(0);
-  sql::DataType cond_var_type(sql::InvalidType);
   if (command.where) {
     cond_var_type_index = GetColumnIndex(command.where->column_name);
-    cond_var_type = table_schema_.column_list.at(cond_var_type_index).type;
   }
 
   // core loop
   bool expr_res;
   PageCell value;
+  sql::TypeCode type_code;
   sql::Value lhs;
-  std::vector<sql::ValueList> out_tuples;
+  std::vector<sql::TypeValueList> out_tuples;
   auto iter = tuples.begin();
   while (iter != tuples.end()) {
     // apply condition
     if (command.where) {
       value = GetValue(*iter, cond_var_type_index);
-      lhs = sql::BytesToValue(cond_var_type, value);
-      expr_res = sql::CompareValue(lhs, command.where->value, cond_var_type,
+      type_code = GetTypeCode(*iter, cond_var_type_index);
+      lhs = sql::BytesToValue(type_code, value);
+      expr_res = sql::CompareValue(lhs, command.where->value, type_code,
+                                   command.where->type_code,
                                    command.where->condition_operator);
 
       if (!expr_res) {
@@ -808,19 +796,25 @@ const std::vector<sql::ValueList> TableManager::InternalFilterTuple(
     }
 
     // select columns
-    sql::ValueList tuple;
+    sql::TypeValueList tuple;
     if (select_star) {
       // get all values one time (much faster)
       std::vector<PageCell> values;
+      std::vector<sql::TypeCode> type_codes;
       GetValues(*iter, column_indexes, values);
+      GetTypeCodes(*iter, column_indexes, type_codes);
 
       for (auto i = 0; i < values.size(); i++) {
-        tuple.push_back(sql::BytesToValue(column_types.at(i), values.at(i)));
+        tuple.push_back(
+            std::make_pair(type_codes.at(i),
+                           sql::BytesToValue(type_codes.at(i), values.at(i))));
       }
     } else {
       for (auto i = 0; i < column_indexes.size(); i++) {
         value = GetValue(*iter, column_indexes.at(i));
-        tuple.push_back(sql::BytesToValue(column_types.at(i), value));
+        type_code = GetTypeCode(*iter, column_indexes.at(i));
+        tuple.push_back(
+            std::make_pair(type_code, sql::BytesToValue(type_code, value)));
       }
     }
     out_tuples.push_back(tuple);
@@ -850,7 +844,8 @@ bool TableManager::IsColumnValid(const std::string& column_name) {
   return (res != table_schema_.column_list.end());
 }
 
-sql::DataType TableManager::GetColumnType(const std::string& column_name) {
+sql::SchemaDataType TableManager::GetColumnType(
+    const std::string& column_name) {
   auto res = std::find_if(table_schema_.column_list.begin(),
                           table_schema_.column_list.end(),
                           [column_name](const sql::CreateTableColumn& arg) {
@@ -863,7 +858,8 @@ sql::DataType TableManager::GetColumnType(const std::string& column_name) {
   }
 }
 
-sql::DataType TableManager::GetColumnType(const std::size_t& column_index) {
+sql::SchemaDataType TableManager::GetColumnType(
+    const std::size_t& column_index) {
   if (column_index < table_schema_.column_list.size()) {
     return table_schema_.column_list.at(column_index).type;
   } else {

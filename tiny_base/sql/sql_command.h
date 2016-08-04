@@ -6,16 +6,9 @@
 
 namespace sql {
 
-static std::vector<uint16_t> DataTypeSize = {1, 2, 4, 8, 1, 2,
-                                             4, 8, 4, 8, 8, 8};
-
-static uint16_t DataTypeToSize(const int16_t& type) {
-  return type < Text ? DataTypeSize[type] : (type - Text);
-}
-
 struct CreateTableColumn {
   std::string column_name;
-  DataType type;
+  SchemaDataType type;
   ColumnAttribute attribute;
 };
 
@@ -24,16 +17,21 @@ struct CreateTableCommand {
   std::vector<CreateTableColumn> column_list;
 };
 
+using TypeCodeList = std::vector<TypeCode>;
+using TypeValue = std::pair<TypeCode, Value>;
 using ValueList = std::vector<Value>;
+using TypeValueList = std::vector<TypeValue>;
 
 struct InsertIntoCommand {
   std::string table_name;
+  TypeCodeList type_list;
   ValueList value_list;
 };
 
 struct WhereClause {
   std::string column_name;
   OperatorType condition_operator;
+  TypeCode type_code;
   Value value;
 };
 

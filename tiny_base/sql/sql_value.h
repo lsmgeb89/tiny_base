@@ -13,11 +13,7 @@ namespace sql {
 
 namespace expr = std::experimental;
 
-enum DataType {
-  OneByteNull = 0x00,
-  TwoByteNull = 0x01,
-  FourByteNull = 0x02,
-  EightByteNull = 0x03,
+enum SchemaDataType {
   TinyInt = 0x04,
   SmallInt = 0x05,
   Int = 0x06,
@@ -30,6 +26,14 @@ enum DataType {
   InvalidType = 0xFF
 };
 
+enum NullType {
+  OneByteNull = 0x00,
+  TwoByteNull = 0x01,
+  FourByteNull = 0x02,
+  EightByteNull = 0x03
+};
+
+using TypeCode = uint8_t;
 using Value = std::experimental::any;
 
 enum OperatorType {
@@ -44,30 +48,46 @@ enum OperatorType {
 
 enum ColumnAttribute { primary_key, not_null, could_null };
 
-static const Value BytesToValue(const DataType& type,
+static std::vector<uint16_t> SchemaDataTypeSize = {1, 2, 4, 8, 1, 2, 4,
+                                                   8, 4, 8, 8, 8, 0};
+
+inline uint16_t TypeCodeToSize(const uint8_t& type_code) {
+  return (type_code <= Text) ? SchemaDataTypeSize[type_code]
+                             : (type_code - Text);
+}
+
+inline bool IsTypeCodeNull(const TypeCode& type_code) {
+  return (OneByteNull == type_code || TwoByteNull == type_code ||
+          FourByteNull == type_code || EightByteNull == type_code ||
+          Text == type_code);
+}
+
+static const Value BytesToValue(const TypeCode& type_code,
                                 const std::vector<char>& bytes) {
   Value to_value;
 
-  switch (type) {
+  switch (type_code) {
     case OneByteNull:
+    case TwoByteNull:
+    case FourByteNull:
+    case EightByteNull:
+      to_value = 0;
+      break;
     case TinyInt: {
       int8_t value_8;
       std::memcpy(&value_8, bytes.data(), sizeof(value_8));
       to_value = value_8;
     } break;
-    case TwoByteNull:
     case SmallInt: {
       int16_t value_16;
       std::memcpy(&value_16, bytes.data(), sizeof(value_16));
       to_value = value_16;
     } break;
-    case FourByteNull:
     case Int: {
       int32_t value_32;
       std::memcpy(&value_32, bytes.data(), sizeof(value_32));
       to_value = value_32;
     } break;
-    case EightByteNull:
     case BigInt: {
       int64_t value_64;
       std::memcpy(&value_64, bytes.data(), sizeof(value_64));
@@ -93,42 +113,46 @@ static const Value BytesToValue(const DataType& type,
       std::memcpy(&value_date, bytes.data(), sizeof(value_date));
       to_value = value_date;
     } break;
-    case Text: {
-      std::string value_str;
-      std::copy(bytes.begin(), bytes.end(), std::back_inserter(value_str));
-      to_value = value_str;
-    } break;
     default:
       break;
+  }
+
+  // contain empty string for NULL
+  if (type_code >= Text) {
+    std::string value_str;
+    std::copy(bytes.begin(), bytes.end(), std::back_inserter(value_str));
+    to_value = value_str;
   }
 
   return to_value;
 }
 
-static const std::string BytesToString(const DataType& type,
+static const std::string BytesToString(const TypeCode& type_code,
                                        const std::vector<char>& bytes) {
   std::string res_str;
 
-  switch (type) {
+  switch (type_code) {
     case OneByteNull:
+    case TwoByteNull:
+    case FourByteNull:
+    case EightByteNull:
+      res_str = "NULL";
+      break;
     case TinyInt: {
       int8_t value_8;
       std::memcpy(&value_8, bytes.data(), sizeof(value_8));
       res_str = std::to_string(value_8);
     } break;
-    case TwoByteNull:
     case SmallInt: {
       int16_t value_16;
       std::memcpy(&value_16, bytes.data(), sizeof(value_16));
       res_str = std::to_string(value_16);
     } break;
-    case FourByteNull:
     case Int: {
       int32_t value_32;
       std::memcpy(&value_32, bytes.data(), sizeof(value_32));
       res_str = std::to_string(value_32);
     } break;
-    case EightByteNull:
     case BigInt: {
       int64_t value_64;
       std::memcpy(&value_64, bytes.data(), sizeof(value_64));
@@ -149,8 +173,7 @@ static const std::string BytesToString(const DataType& type,
       std::memcpy(&value_date_time, bytes.data(), sizeof(value_date_time));
       std::time_t date_time(value_date_time);
       std::stringstream str_stream;
-      // TODO: localtime or gmtime
-      str_stream << std::put_time(std::localtime(&date_time), "%F_%T");
+      str_stream << std::put_time(std::gmtime(&date_time), "%F_%T");
       res_str = str_stream.str();
     } break;
     case Date: {
@@ -158,17 +181,18 @@ static const std::string BytesToString(const DataType& type,
       std::memcpy(&value_date, bytes.data(), sizeof(value_date));
       std::time_t date(value_date);
       std::stringstream str_stream;
-      // TODO: localtime or gmtime
-      str_stream << std::put_time(std::localtime(&date), "%F");
+      str_stream << std::put_time(std::gmtime(&date), "%F");
       res_str = str_stream.str();
-    } break;
-    case Text: {
-      std::string value_str;
-      std::copy(bytes.begin(), bytes.end(), std::back_inserter(value_str));
-      res_str = value_str;
     } break;
     default:
       break;
+  }
+
+  // contain empty string for NULL
+  if (type_code >= Text) {
+    std::string value_str;
+    std::copy(bytes.begin(), bytes.end(), std::back_inserter(value_str));
+    res_str = value_str;
   }
 
   return res_str;
@@ -232,32 +256,36 @@ inline bool Compare(const std::time_t& lhs, const std::time_t& rhs,
 }
 
 static const bool CompareValue(const Value& lhs, const Value& rhs,
-                               const DataType& type,
+                               const TypeCode& l_type_code,
+                               const TypeCode& r_type_code,
                                const OperatorType& operator_type) {
   bool result(false);
-  switch (type) {
-    case OneByteNull:
+
+  // compare NULL
+  if (IsTypeCodeNull(l_type_code) || IsTypeCodeNull(r_type_code)) {
+    result = false;
+  }
+
+  // compare non-null, non-string value
+  switch (l_type_code) {
     case TinyInt: {
-      int8_t lhs_value_8 = std::experimental::any_cast<int8_t>(lhs);
-      int8_t rhs_value_8 = std::experimental::any_cast<int8_t>(rhs);
+      int8_t lhs_value_8 = expr::any_cast<int8_t>(lhs);
+      int8_t rhs_value_8 = expr::any_cast<int8_t>(rhs);
       result = Compare(lhs_value_8, rhs_value_8, operator_type);
     } break;
-    case TwoByteNull:
     case SmallInt: {
-      int16_t lhs_value_16 = std::experimental::any_cast<int16_t>(lhs);
-      int16_t rhs_value_16 = std::experimental::any_cast<int16_t>(rhs);
+      int16_t lhs_value_16 = expr::any_cast<int16_t>(lhs);
+      int16_t rhs_value_16 = expr::any_cast<int16_t>(rhs);
       result = Compare(lhs_value_16, rhs_value_16, operator_type);
     } break;
-    case FourByteNull:
     case Int: {
-      int32_t lhs_value_32 = std::experimental::any_cast<int32_t>(lhs);
-      int32_t rhs_value_32 = std::experimental::any_cast<int32_t>(rhs);
+      int32_t lhs_value_32 = expr::any_cast<int32_t>(lhs);
+      int32_t rhs_value_32 = expr::any_cast<int32_t>(rhs);
       result = Compare(lhs_value_32, rhs_value_32, operator_type);
     } break;
-    case EightByteNull:
     case BigInt: {
-      int64_t lhs_value_64 = std::experimental::any_cast<int64_t>(lhs);
-      int64_t rhs_value_64 = std::experimental::any_cast<int64_t>(rhs);
+      int64_t lhs_value_64 = expr::any_cast<int64_t>(lhs);
+      int64_t rhs_value_64 = expr::any_cast<int64_t>(rhs);
       result = Compare(lhs_value_64, rhs_value_64, operator_type);
     } break;
     case Real: {
@@ -284,20 +312,22 @@ static const bool CompareValue(const Value& lhs, const Value& rhs,
       std::time_t rhs_date(rhs_value_date);
       result = Compare(lhs_date, rhs_date, operator_type);
     } break;
-    case Text: {
-      std::string lhs_value_str = std::experimental::any_cast<std::string>(lhs);
-      std::string rhs_value_str = std::experimental::any_cast<std::string>(rhs);
-      result = Compare(lhs_value_str, rhs_value_str, operator_type);
-    } break;
     default:
       break;
+  }
+
+  if (l_type_code > Text && r_type_code > Text) {
+    std::string lhs_value_str = std::experimental::any_cast<std::string>(lhs);
+    std::string rhs_value_str = std::experimental::any_cast<std::string>(rhs);
+    result = Compare(lhs_value_str, rhs_value_str, operator_type);
   }
 
   return result;
 }
 
-static const DataType StringToType(const std::string& type_str) {
-  DataType type(InvalidType);
+static const SchemaDataType StringToSchemaDataType(
+    const std::string& type_str) {
+  SchemaDataType type(InvalidType);
   std::string converted_str;
 
   transform(type_str.begin(), type_str.end(), std::back_inserter(converted_str),
@@ -326,30 +356,18 @@ static const DataType StringToType(const std::string& type_str) {
   return type;
 }
 
-static const std::string TypeToString(const DataType& type) {
+static const std::string DataTypeToString(const SchemaDataType& type) {
   std::string out_str;
 
   switch (type) {
-    case OneByteNull:
-      out_str = "NULL";
-      break;
     case TinyInt:
       out_str = "TINYINT";
-      break;
-    case TwoByteNull:
-      out_str = "NULL";
       break;
     case SmallInt:
       out_str = "SMALLINT";
       break;
-    case FourByteNull:
-      out_str = "NULL";
-      break;
     case Int:
       out_str = "INT";
-      break;
-    case EightByteNull:
-      out_str = "NULL";
       break;
     case BigInt:
       out_str = "BIGINT";
@@ -387,7 +405,7 @@ static const OperatorType StringToOperator(const std::string& operator_str) {
     compare_operator = Larger;
   } else if (operator_str == "<") {
     compare_operator = Smaller;
-  } else if (operator_str == "=>") {
+  } else if (operator_str == ">=") {
     compare_operator = NotSmaller;
   } else if (operator_str == "<=") {
     compare_operator = NotLarger;
@@ -397,23 +415,31 @@ static const OperatorType StringToOperator(const std::string& operator_str) {
 }
 
 static const Value StringToValue(const std::string& value_str,
-                                 const DataType& type) {
+                                 const TypeCode& type_code) {
   Value sql_value;
 
-  switch (type) {
+  switch (type_code) {
     case OneByteNull:
+      sql_value = static_cast<int8_t>(0);
+      break;
     case TinyInt:
       sql_value = static_cast<int8_t>(std::stoi(value_str));
       break;
     case TwoByteNull:
+      sql_value = static_cast<int16_t>(0);
+      break;
     case SmallInt:
       sql_value = static_cast<int16_t>(std::stoi(value_str));
       break;
     case FourByteNull:
+      sql_value = static_cast<int32_t>(0);
+      break;
     case Int:
       sql_value = static_cast<int32_t>(std::stoi(value_str));
       break;
     case EightByteNull:
+      sql_value = static_cast<int64_t>(0);
+      break;
     case BigInt:
       sql_value = static_cast<int64_t>(std::stoll(value_str));
       break;
@@ -424,40 +450,36 @@ static const Value StringToValue(const std::string& value_str,
       sql_value = static_cast<double>(std::stod(value_str));
       break;
     case DateTime: {
-      std::tm tm;
+      std::tm tm{};
       std::istringstream str_stream(value_str);
       str_stream >> std::get_time(&tm, "%Y-%m-%d_%T");
       std::time_t time = std::mktime(&tm);
       sql_value = static_cast<uint64_t>(time);
     } break;
     case Date: {
-      std::tm tm;
+      std::tm tm{};
       std::istringstream str_stream(value_str);
       str_stream >> std::get_time(&tm, "%Y-%m-%d");
       std::time_t time = std::mktime(&tm);
       sql_value = static_cast<uint64_t>(time);
     } break;
-    case Text: {
-      sql_value = value_str;
-    } break;
     default:
       break;
+  }
+
+  if (type_code >= Text) {
+    sql_value = value_str;
   }
 
   return sql_value;
 }
 
-inline const std::string AttributeToString(const ColumnAttribute& attribute) {
-  std::string ret;
-  if (attribute == primary_key) {
-    ret = "PRIMARY KEY";
-  } else if (attribute == not_null) {
-    ret = "NOT NULLABLE";
-  } else if (attribute == could_null) {
-    ret = "NULLABLE";
-  }
+inline const std::string IsAttributeNullable(const ColumnAttribute& attribute) {
+  return (attribute == could_null) ? "YES" : "NO";
+}
 
-  return ret;
+inline const std::string IsAttributePrimary(const ColumnAttribute& attribute) {
+  return (attribute == primary_key) ? "PRI" : "";
 }
 
 inline const ColumnAttribute StringToAttribute(const std::string& attr_str) {
@@ -472,6 +494,34 @@ inline const ColumnAttribute StringToAttribute(const std::string& attr_str) {
   }
 
   return attribute;
+}
+
+static const uint8_t DataTypeToTypeCode(const SchemaDataType& schema_type,
+                                        const std::string& value_str) {
+  uint8_t type_code = static_cast<uint8_t>(schema_type);
+
+  if ("NULL" == value_str) {
+    switch (SchemaDataTypeSize.at(schema_type)) {
+      case 1:
+        type_code = OneByteNull;
+        break;
+      case 2:
+        type_code = TwoByteNull;
+        break;
+      case 4:
+        type_code = FourByteNull;
+        break;
+      case 8:
+        type_code = EightByteNull;
+        break;
+      default:
+        break;
+    }
+  } else if (Text == schema_type) {
+    type_code += value_str.size();
+  }
+
+  return type_code;
 }
 
 }  // namespace sql

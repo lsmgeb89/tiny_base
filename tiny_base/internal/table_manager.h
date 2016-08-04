@@ -33,14 +33,14 @@ class TableManager {
   const std::pair<int32_t, std::string> SelectFrom(
       const sql::SelectFromCommand& command);
 
-  const std::vector<sql::ValueList> InternalSelectFrom(
+  const std::vector<sql::TypeValueList> InternalSelectFrom(
       const sql::SelectFromCommand& command);
 
   bool IsColumnValid(const std::string& column_name);
 
-  sql::DataType GetColumnType(const std::string& column_name);
+  sql::SchemaDataType GetColumnType(const std::string& column_name);
 
-  sql::DataType GetColumnType(const std::size_t& column_index);
+  sql::SchemaDataType GetColumnType(const std::size_t& column_index);
 
  private:
   // info for the table
@@ -169,7 +169,7 @@ class TableManager {
   const std::pair<int32_t, std::string> FilterTuple(
       const sql::SelectFromCommand& command, std::vector<PageCell>& tuples);
 
-  const std::vector<sql::ValueList> InternalFilterTuple(
+  const std::vector<sql::TypeValueList> InternalFilterTuple(
       const sql::SelectFromCommand& command, std::vector<PageCell>& tuples);
 
   std::ptrdiff_t GetColumnIndex(const std::string& column_name);
