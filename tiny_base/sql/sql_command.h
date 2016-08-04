@@ -53,6 +53,15 @@ struct UpdateSetCommand {
   WhereClause where;
 };
 
+struct DeleteFromCommand {
+  std::string table_name;
+  WhereClause where;
+};
+
+struct DropTableCommand {
+  std::string table_name;
+};
+
 }  // namespace sql
 
 #endif  // TINY_BASE_SQL_COMMAND_H_

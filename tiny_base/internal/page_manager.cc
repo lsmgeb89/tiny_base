@@ -159,6 +159,10 @@ void PageManager::InsertCell(const CellKey& primary_key, const PageCell& cell) {
 }
 
 void PageManager::DeleteCell(const CellIndex& cell_index) {
+  if (cell_index >= cell_num_) {
+    return;
+  }
+
   // delete cell pointer
   cell_pointer_array_.erase(cell_pointer_array_.begin() + cell_index);
 
@@ -270,6 +274,10 @@ bool PageManager::UpdateCell(const CellKey& key, const PageCell& cell) {
   }
 
   return ret;
+}
+
+CellIndex PageManager::GetCellIndex(const CellKey& cell_key) const {
+  return std::distance(key_set_.begin(), key_set_.find(cell_key));
 }
 
 }  // namespace internal

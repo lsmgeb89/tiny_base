@@ -285,10 +285,10 @@ PageIndex TableManager::SearchPage(const PageIndex& current_page,
   if (primary_key < key_range.first) {
     return SearchPage(page_list_[current_page].GetLeftMostPagePointer(),
                       primary_key);
-  } else if (primary_key > key_range.first && primary_key < key_range.second) {
+  } else if (primary_key >= key_range.first && primary_key < key_range.second) {
     return GetCellLeftPointer(current_page,
                               GetLowerBound(current_page, primary_key));
-  } else if (primary_key > key_range.second) {
+  } else if (primary_key >= key_range.second) {
     return SearchPage(page_list_[current_page].GetRightMostPagePointer(),
                       primary_key);
   }
@@ -868,6 +868,19 @@ done:
   } else {
     return "1 record (" + std::to_string(count) + " column(s)) updated\n";
   }
+}
+
+void TableManager::DeleteFrom(const sql::DeleteFromCommand& command) {
+  // pinpoint cell
+  int32_t condition_value = sql::expr::any_cast<int32_t>(command.where.value);
+  PageIndex target_page(SearchPage(root_page_, condition_value));
+  CellIndex target_cell =
+      page_list_.at(target_page).GetCellIndex(condition_value);
+
+  // delete it
+  page_list_.at(target_page).DeleteCell(target_cell);
+  page_list_.at(target_page).UpdateInfo();
+  page_list_.at(target_page).Reorder();
 }
 
 std::ptrdiff_t TableManager::GetColumnIndex(const std::string& column_name) {

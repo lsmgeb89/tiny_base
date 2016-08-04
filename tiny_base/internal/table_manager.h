@@ -38,6 +38,8 @@ class TableManager {
 
   const std::string UpdateSet(const sql::UpdateSetCommand& command);
 
+  void DeleteFrom(const sql::DeleteFromCommand& command);
+
   bool IsColumnValid(const std::string& column_name);
 
   sql::SchemaDataType GetColumnType(const std::string& column_name);

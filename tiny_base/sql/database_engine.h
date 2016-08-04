@@ -33,6 +33,8 @@ class DatabaseEngine {
   bool ParseShowTableCommand(const std::string& sql_command);
   bool ParseUpdateSetCommand(const std::string& sql_command,
                              UpdateSetCommand& command);
+  bool ParseDropTableCommand(const std::string& sql_command,
+                             DropTableCommand& command);
 
   // Executor
   bool ExecuteCreateTableCommand(const CreateTableCommand& command);
@@ -40,6 +42,7 @@ class DatabaseEngine {
   void ExecuteSelectFromCommand(const SelectFromCommand& command);
   void ExecuteShowTablesCommand(void);
   void ExecuteUpdateSetCommand(const UpdateSetCommand& command);
+  void ExecuteDropTableCommand(const DropTableCommand& command);
 
   // Manage table
   void RegisterTable(const CreateTableCommand& table_schema);
@@ -49,6 +52,15 @@ class DatabaseEngine {
   internal::TableManager* LoadTable(const std::string& table_name);
   void UpdateTableInfo(const std::string& table_name);
   void SaveRootTableInfo(void);
+
+  void GetRowid(const std::string& target_table,
+                const std::string& condition_table,
+                std::vector<int32_t>& rowid);
+
+  const int32_t GetMaxRowid(const std::string& target_table);
+
+  void ClearTableInfo(const std::string& target_table,
+                      const std::string& condition_table);
 
   // helper
   static bool ExtractStr(const std::string& target_str,

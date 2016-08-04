@@ -45,6 +45,8 @@ class PageManager {
 
   PageCell GetCell(const CellIndex& cell_index) const;
 
+  CellIndex GetCellIndex(const CellKey& cell_key) const;
+
   PageIndex GetParent(void) { return parent_; }
 
   PageIndex GetLeftMostPagePointer(void);

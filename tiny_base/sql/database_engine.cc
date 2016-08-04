@@ -94,6 +94,7 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
   InsertIntoCommand insert_command;
   SelectFromCommand select_command;
   UpdateSetCommand update_command;
+  DropTableCommand drop_command;
 
   // get first keyword
   result = ExtractStr(sql_command, "\\s*(\\w+).*", token);
@@ -137,6 +138,12 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
       goto done;
     }
     ExecuteUpdateSetCommand(update_command);
+  } else if (keyword == "DROP") {
+    result = ParseDropTableCommand(sql_command, drop_command);
+    if (!result) {
+      goto done;
+    }
+    ExecuteDropTableCommand(drop_command);
   } else if (keyword == "EXIT") {
     std::cout << "Bye!" << std::endl;
     SaveRootTableInfo();
@@ -506,6 +513,28 @@ done:
   return result;
 }
 
+bool DatabaseEngine::ParseDropTableCommand(const std::string& sql_command,
+                                           DropTableCommand& command) {
+  bool result(false);
+  std::vector<std::string> token;
+
+  result =
+      ExtractStr(sql_command, "\\s*DROP\\s*TABLE\\s*([\\.\\w_-]+)\\s*", token);
+  if (!result || token.size() != 1) {
+    goto done;
+  }
+
+  // check table
+  command.table_name = token.front();
+  if ((database_tables_.find(command.table_name) == database_tables_.end()) &&
+      !fs::exists("data/" + command.table_name + ".tbl")) {
+    result = false;
+  }
+
+done:
+  return result;
+}
+
 bool DatabaseEngine::ExecuteCreateTableCommand(
     const CreateTableCommand& command) {
   bool result(false);
@@ -548,6 +577,12 @@ void DatabaseEngine::ExecuteUpdateSetCommand(const UpdateSetCommand& command) {
             << std::flush;
 }
 
+void DatabaseEngine::ExecuteDropTableCommand(const DropTableCommand& command) {
+  ClearTableInfo(root_schema_tables.table_name, command.table_name);
+  ClearTableInfo(root_schema_columns.table_name, command.table_name);
+  fs::remove("data/" + command.table_name + ".tbl");
+}
+
 void DatabaseEngine::SplitStr(const std::string& target_str, const char delimit,
                               std::vector<std::string>& split_str) {
   std::stringstream str_stream(target_str);
@@ -580,6 +615,66 @@ bool DatabaseEngine::ExtractStr(const std::string& target_str,
   }
 
   return result;
+}
+
+const int32_t DatabaseEngine::GetMaxRowid(const std::string& target_table) {
+  SelectFromCommand query_rowid_count = {target_table, {"table_name"}};
+
+  auto res =
+      database_tables_.at(target_table).InternalSelectFrom(query_rowid_count);
+  return res.size();
+}
+
+void DatabaseEngine::GetRowid(const std::string& target_table,
+                              const std::string& condition_table,
+                              std::vector<int32_t>& rowid) {
+  std::vector<sql::TypeValueList> tables_query_result;
+  WhereClause where_condition = {
+      "table_name", Equal, static_cast<TypeCode>(Text + condition_table.size()),
+      condition_table};
+
+  SelectFromCommand query_rowid = {
+      target_table,
+      {"row_id"},
+      std::experimental::make_optional(where_condition)};
+
+  tables_query_result = database_tables_.at(query_rowid.table_name)
+                            .InternalSelectFrom(query_rowid);
+
+  rowid.clear();
+
+  for (auto tuple_result : tables_query_result) {
+    int32_t row_id = expr::any_cast<int32_t>(tuple_result.front().second);
+    rowid.push_back(row_id);
+  }
+}
+
+void DatabaseEngine::ClearTableInfo(const std::string& target_table,
+                                    const std::string& condition_table) {
+  std::vector<int32_t> rowid_list;
+  int32_t max_row_id;
+  DeleteFromCommand delete_record;
+  UpdateSetCommand update_rowid;
+
+  max_row_id = GetMaxRowid(target_table);
+  GetRowid(target_table, condition_table, rowid_list);
+
+  // do clearance
+  for (auto rowid : rowid_list) {
+    delete_record = {target_table, {"row_id", Equal, Int, rowid}};
+    database_tables_.at(target_table).DeleteFrom(delete_record);
+  }
+
+  // update rowid after deleted tuples
+  int32_t max_del_rowid = rowid_list.back();
+  if (max_del_rowid < max_row_id) {
+    for (auto i = 0; i < max_row_id - rowid_list.back(); i++) {
+      update_rowid = {target_table,
+                      {{"row_id", Int, rowid_list.at(i)}},
+                      {"row_id", Equal, Int, max_del_rowid + i + 1}};
+      database_tables_.at(target_table).UpdateSet(update_rowid);
+    }
+  }
 }
 
 void DatabaseEngine::RegisterTable(const CreateTableCommand& table_schema) {
