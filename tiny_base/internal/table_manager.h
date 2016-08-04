@@ -44,6 +44,10 @@ class TableManager {
 
   sql::SchemaDataType GetColumnType(const std::size_t& column_index);
 
+  const int32_t GetRootPage(void) const { return root_page_; }
+
+  const int32_t GetFanout(void) const { return fanout_; }
+
  private:
   // info for the table
   fs::path file_path_;

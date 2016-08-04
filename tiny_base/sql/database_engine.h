@@ -47,6 +47,8 @@ class DatabaseEngine {
   const TableInfo LoadRootTableInfo(const std::string& table_name);
   const CreateTableCommand LoadSchema(const std::string& table_name);
   internal::TableManager* LoadTable(const std::string& table_name);
+  void UpdateTableInfo(const std::string& table_name);
+  void SaveRootTableInfo(void);
 
   // helper
   static bool ExtractStr(const std::string& target_str,

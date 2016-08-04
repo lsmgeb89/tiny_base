@@ -110,12 +110,15 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
       goto done;
     }
     ExecuteCreateTableCommand(create_command);
+    UpdateTableInfo("tinybase_tables");
+    UpdateTableInfo("tinybase_columns");
   } else if (keyword == "INSERT") {
     result = ParseInsertIntoCommand(sql_command, insert_command);
     if (!result) {
       goto done;
     }
     ExecuteInsertIntoCommand(insert_command);
+    UpdateTableInfo(insert_command.table_name);
   } else if (keyword == "SELECT") {
     result = ParseSelectFromCommand(sql_command, select_command);
     if (!result) {
@@ -135,6 +138,8 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
     }
     ExecuteUpdateSetCommand(update_command);
   } else if (keyword == "EXIT") {
+    std::cout << "Bye!" << std::endl;
+    SaveRootTableInfo();
     exit = true;
   }
 
@@ -658,9 +663,10 @@ const std::pair<int32_t, int32_t> DatabaseEngine::LoadTableInfo(
 
   // fanout
   int32_t root_page =
-      expr::any_cast<int32_t>(tables_query_result.front().at(2));
+      expr::any_cast<int32_t>(tables_query_result.front().at(2).second);
   // root page
-  int32_t fanout = expr::any_cast<int32_t>(tables_query_result.front().at(3));
+  int32_t fanout =
+      expr::any_cast<int32_t>(tables_query_result.front().at(3).second);
 
   return std::make_pair(root_page, fanout);
 }
@@ -686,18 +692,18 @@ const CreateTableCommand DatabaseEngine::LoadSchema(
   table_schema.table_name = table_name;
   CreateTableColumn column;
   std::string attribute;
-  for (auto tuple : columns_query_result) {
-    column.column_name = expr::any_cast<std::string>(tuple.at(2).second);
-    column.type =
-        StringToSchemaDataType(expr::any_cast<std::string>(tuple.at(3).second));
+  for (auto result_tuple : columns_query_result) {
+    column.column_name = expr::any_cast<std::string>(result_tuple.at(2).second);
+    column.type = StringToSchemaDataType(
+        expr::any_cast<std::string>(result_tuple.at(3).second));
     // first check column_key
-    attribute = expr::any_cast<std::string>(tuple.at(6).second);
+    attribute = expr::any_cast<std::string>(result_tuple.at(6).second);
     if (attribute == "PRI") {
       column.attribute = primary_key;
     } else {
       // second check is_nullable
-      attribute = expr::any_cast<std::string>(tuple.at(5).second);
-      column.attribute = (attribute == "YES") ? not_null : could_null;
+      attribute = expr::any_cast<std::string>(result_tuple.at(5).second);
+      column.attribute = (attribute == "YES") ? could_null : not_null;
     }
     table_schema.column_list.push_back(column);
   }
@@ -709,7 +715,7 @@ const TableInfo DatabaseEngine::LoadRootTableInfo(
     const std::string& table_name) {
   int32_t root_page(0);
   int32_t fanout(0);
-  std::ifstream infile(".table_info");
+  std::ifstream infile("data/.table_info");
 
   if (table_name == "tinybase_tables") {
     infile >> root_page >> fanout;
@@ -721,6 +727,63 @@ const TableInfo DatabaseEngine::LoadRootTableInfo(
   infile.close();
 
   return std::make_pair(root_page, fanout);
+}
+
+void DatabaseEngine::UpdateTableInfo(const std::string& table_name) {
+  // table must be loaded
+  if (database_tables_.find(table_name) == database_tables_.end()) {
+    return;
+  }
+
+  // get current info
+  internal::TableManager* table = &(database_tables_.at(table_name));
+  int32_t root_page = table->GetRootPage();
+  int32_t fanout = table->GetFanout();
+
+  // query table's row_id
+  std::vector<sql::TypeValueList> tables_query_result;
+  WhereClause where_condition = {
+      "table_name", Equal, static_cast<TypeCode>(Text + table_name.size()),
+      table_name};
+
+  SelectFromCommand query_rowid = {
+      "tinybase_tables",
+      {"row_id"},
+      std::experimental::make_optional(where_condition)};
+
+  tables_query_result =
+      database_tables_.at("tinybase_tables").InternalSelectFrom(query_rowid);
+
+  int32_t row_id =
+      expr::any_cast<int32_t>(tables_query_result.front().front().second);
+
+  // update info
+  where_condition = {"row_id", Equal, Int, row_id};
+  UpdateSetCommand update_command = {
+      "tinybase_tables",
+      {{"root_page", Int, root_page}, {"fanout", Int, fanout}},
+      where_condition};
+
+  std::cout << database_tables_.at("tinybase_tables").UpdateSet(update_command)
+            << std::flush;
+}
+
+void DatabaseEngine::SaveRootTableInfo(void) {
+  int32_t root_page;
+  int32_t fanout;
+
+  // overwrite existed one
+  std::ofstream outfile("data/.table_info");
+
+  root_page = database_tables_.at("tinybase_tables").GetRootPage();
+  fanout = database_tables_.at("tinybase_tables").GetFanout();
+  outfile << root_page << " " << fanout << "\n";
+
+  root_page = database_tables_.at("tinybase_columns").GetRootPage();
+  fanout = database_tables_.at("tinybase_columns").GetFanout();
+  outfile << root_page << " " << fanout << "\n";
+
+  outfile.close();
 }
 
 }  // namespace sql
