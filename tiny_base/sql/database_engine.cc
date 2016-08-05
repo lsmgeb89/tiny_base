@@ -63,17 +63,32 @@ DatabaseEngine::DatabaseEngine(void) {
   }
 }
 
-void DatabaseEngine::Run(void) {
+void DatabaseEngine::Run(const std::string file_path) {
   bool exit(false);
+  bool file_mode(false);
   std::string line;
   std::string user_input;
   std::string sql_command;
   std::vector<std::string> res;
+  std::ifstream sql_file;
+
+  if (!file_path.empty()) {
+    file_mode = true;
+    sql_file.open(file_path);
+    if (!sql_file) {
+      std::cerr << "Failed to open file " << file_path << std::endl;
+      sql_file.close();
+      return;
+    }
+  }
 
   do {
-    std::cout << "tinysql> " << std::flush;
+    if (!file_mode) {
+      std::cout << "tinysql> " << std::flush;
+    }
 
-    while (std::getline(std::cin, line) && !line.empty()) {
+    while (std::getline(!file_mode ? std::cin : sql_file, line) &&
+           !line.empty()) {
       if (!user_input.empty()) {
         user_input += " ";
       }
@@ -92,14 +107,20 @@ void DatabaseEngine::Run(void) {
         if (exit) {
           break;
         }
-        if (ExtractStr(user_input, "^\\s*$", res)) {
-          std::cout << "tinysql> " << std::flush;
-        } else {
-          std::cout << "      -> " << std::flush;
+        if (!file_mode) {
+          if (ExtractStr(user_input, "^\\s*$", res)) {
+            std::cout << "tinysql> " << std::flush;
+          } else {
+            std::cout << "      -> " << std::flush;
+          }
         }
       }
     }  // getline loop
   } while (!exit);
+
+  if (file_mode) {
+    sql_file.close();
+  }
 }
 
 bool DatabaseEngine::Execute(const std::string& sql_command) {

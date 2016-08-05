@@ -13,7 +13,7 @@ using TableInfo = std::pair<int32_t, int32_t>;
 class DatabaseEngine {
  public:
   DatabaseEngine(void);
-  void Run(void);
+  void Run(const std::string file_path);
 
  private:
   static const std::string hidden_file;

@@ -2,6 +2,12 @@
 
 int main(int argc, char* argv[]) {
   sql::DatabaseEngine engine;
-  engine.Run();
+
+  if (argc == 2) {
+    engine.Run(argv[1]);
+  } else {
+    engine.Run("");
+  }
+
   return 0;
 }
