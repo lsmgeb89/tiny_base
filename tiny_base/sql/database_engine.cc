@@ -550,6 +550,13 @@ bool DatabaseEngine::ParseValue(const std::string& value_str,
   bool result(false);
 
   if (Text == type) {
+    result = ExtractStr(value_str, "\\s*NULL\\s*", values);
+    if (result) {
+      // convert NULL to internal null representation (empty string)
+      values.resize(1);
+      values.front() = "";
+      return true;
+    }
     values.resize(1);
     return ExtractStrInQuotation(value_str, values.front());
   } else if (Date == type || DateTime == type) {
