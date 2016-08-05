@@ -169,11 +169,8 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
       case sql::Date: {
         uint64_t value_date =
             sql::expr::any_cast<uint64_t>(command.value_list.at(i));
-        std::cout << "PrepareLeafCell: "
-                  << " value_date: " << value_date;
         value_date = utils::SwapEndian<decltype(value_date)>(value_date);
         std::memcpy(table_leaf_cell.data() + offset, &value_date, type_size);
-        std::cout << " value_date(swapped): " << value_date << std::endl;
       } break;
       default:
         break;

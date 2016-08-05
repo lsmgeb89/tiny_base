@@ -237,8 +237,6 @@ static const std::string BytesToString(const TypeCode& type_code,
       uint64_t value_date;
       std::memcpy(&value_date, bytes.data(), sizeof(value_date));
       std::time_t date(value_date);
-      std::cout << "BytesToString: value_date: " << value_date
-                << " time_t: " << date << std::endl;
       std::stringstream str_stream;
       str_stream << std::put_time(std::gmtime(&date), "%F");
       res_str = str_stream.str();
@@ -521,8 +519,6 @@ static const Value StringToValue(const std::string& value_str,
       str_stream >> std::get_time(&tm, "%Y-%m-%d");
       std::time_t time = std::mktime(&tm);
       sql_value = static_cast<uint64_t>(time);
-      std::cout << "StringToValue: " << value_str << " time_t: " << time
-                << std::endl;
     } break;
     default:
       break;

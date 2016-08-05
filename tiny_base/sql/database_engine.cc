@@ -291,7 +291,7 @@ bool DatabaseEngine::ParseInsertIntoCommand(const std::string& sql_command,
       values.push_back(
           token.at(i).substr(str_begin + 1, str_end - str_begin - 1));
     } else {
-      result = ExtractStr(token.at(i), "\\s*([\\w-_\\.]+)\\s*", values);
+      result = ExtractStr(token.at(i), "\\s*([\\w-_:\\.]+)\\s*", values);
       if (!result || values.size() != 1) {
         goto done;
       }
@@ -871,8 +871,7 @@ void DatabaseEngine::UpdateTableInfo(const std::string& table_name) {
       {{"root_page", Int, root_page}, {"fanout", Int, fanout}},
       where_condition};
 
-  std::cout << database_tables_.at("tinybase_tables").UpdateSet(update_command)
-            << std::flush;
+  database_tables_.at("tinybase_tables").UpdateSet(update_command);
 }
 
 void DatabaseEngine::SaveRootTableInfo(void) {
