@@ -280,4 +280,8 @@ CellIndex PageManager::GetCellIndex(const CellKey& cell_key) const {
   return std::distance(key_set_.begin(), key_set_.find(cell_key));
 }
 
+bool PageManager::IsKeyDuplicate(const CellKey& key) const {
+  return (key_set_.find(key) != key_set_.end());
+}
+
 }  // namespace internal

@@ -59,6 +59,8 @@ class PageManager {
     return std::distance(key_set_.begin(), key_set_.lower_bound(key));
   }
 
+  bool IsKeyDuplicate(const CellKey& key) const;
+
   // Setter
   void SetPageType(const PageType& page_type) { page_type_ = page_type; }
 

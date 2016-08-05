@@ -170,8 +170,6 @@ static void ValueToBytes(const TypeCode& type_code, const Value& value,
     case Date: {
       uint64_t value_date = expr::any_cast<uint64_t>(value);
       std::memcpy(bytes.data(), &value_date, size);
-      std::cout << "ValueToBytes: value_date: " << value_date
-                << " size: " << size << std::endl;
     } break;
     default:
       break;

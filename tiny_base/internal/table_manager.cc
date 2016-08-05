@@ -66,6 +66,14 @@ const std::vector<sql::TypeValueList> TableManager::InternalSelectFrom(
 void TableManager::InsertInto(const sql::InsertIntoCommand& command) {
   CellKey pri_key(GetPrimaryKey(command));
   PageIndex target_page(SearchPage(root_page_, pri_key));
+
+  if (page_list_.at(target_page).IsKeyDuplicate(pri_key)) {
+    std::cerr
+        << "Insertion aborted because trying to insert a duplicate primary key."
+        << std::endl;
+    return;
+  }
+
   PageCell cell(PrepareLeafCell(command));
 
   if ((fanout_ == std::numeric_limits<decltype(fanout_)>::max()) &&
@@ -898,27 +906,24 @@ bool TableManager::IsColumnValid(const std::string& column_name) {
   return (res != table_schema_.column_list.end());
 }
 
-sql::SchemaDataType TableManager::GetColumnType(
-    const std::string& column_name) {
+bool TableManager::GetColumnInfo(const std::string& column_name,
+                                 sql::CreateTableColumn& column_info) {
+  bool ret(false);
   auto res = std::find_if(table_schema_.column_list.begin(),
                           table_schema_.column_list.end(),
                           [column_name](const sql::CreateTableColumn& arg) {
                             return arg.column_name == column_name;
                           });
-  if (res != table_schema_.column_list.end()) {
-    return res->type;
-  } else {
-    return sql::InvalidType;
+  ret = (res != table_schema_.column_list.end());
+  if (ret) {
+    column_info = *res;
   }
+  return ret;
 }
 
-sql::SchemaDataType TableManager::GetColumnType(
+sql::CreateTableColumn TableManager::GetColumnInfo(
     const std::size_t& column_index) {
-  if (column_index < table_schema_.column_list.size()) {
-    return table_schema_.column_list.at(column_index).type;
-  } else {
-    return sql::InvalidType;
-  }
+  return table_schema_.column_list.at(column_index);
 }
 
 }  // namespace internal

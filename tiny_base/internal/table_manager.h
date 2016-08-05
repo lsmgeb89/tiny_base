@@ -42,9 +42,10 @@ class TableManager {
 
   bool IsColumnValid(const std::string& column_name);
 
-  sql::SchemaDataType GetColumnType(const std::string& column_name);
+  bool GetColumnInfo(const std::string& column_name,
+                     sql::CreateTableColumn& column_info);
 
-  sql::SchemaDataType GetColumnType(const std::size_t& column_index);
+  sql::CreateTableColumn GetColumnInfo(const std::size_t& column_index);
 
   const int32_t GetRootPage(void) const { return root_page_; }
 

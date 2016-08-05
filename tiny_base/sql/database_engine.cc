@@ -1,11 +1,16 @@
 #include <iostream>
 #include <regex>
-#include <sstream>
-#include <vector>
 
 #include "database_engine.h"
 
 namespace sql {
+
+#define FILE_PATH(NAME) "data/" + NAME + ".tbl"
+
+const std::string DatabaseEngine::hidden_file = "data/.table_info";
+const std::string DatabaseEngine::regex_for_name = "([-_\\w\\.]+)";
+const std::string DatabaseEngine::regex_for_value = "([-:_\\w\\.]+)";
+const std::string DatabaseEngine::regex_for_type = "(\\w+)";
 
 const CreateTableCommand DatabaseEngine::root_schema_tables = {
     "tinybase_tables",
@@ -30,23 +35,23 @@ DatabaseEngine::DatabaseEngine(void) {
 
   auto res = database_tables_.emplace(
       "tinybase_tables",
-      internal::TableManager(fs::path("data/tinybase_tables.tbl")));
+      internal::TableManager(FILE_PATH(root_schema_tables.table_name)));
   tables_manager = &(res.first->second);
 
   res = database_tables_.emplace(
       "tinybase_columns",
-      internal::TableManager(fs::path("data/tinybase_columns.tbl")));
+      internal::TableManager(FILE_PATH(root_schema_columns.table_name)));
   columns_manager = &(res.first->second);
 
   // TODO: check both file exists or not exists (xor)
 
   if (tables_manager->Exists()) {
-    TableInfo info = LoadRootTableInfo("tinybase_tables");
+    TableInfo info = LoadRootTableInfo(root_schema_tables.table_name);
     tables_manager->Load(root_schema_tables, info.first, info.second);
   }
 
   if (columns_manager->Exists()) {
-    TableInfo info = LoadRootTableInfo("tinybase_columns");
+    TableInfo info = LoadRootTableInfo(root_schema_columns.table_name);
     columns_manager->Load(root_schema_columns, info.first, info.second);
   }
 
@@ -111,6 +116,7 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
   // get first keyword
   result = ExtractStr(sql_command, "\\s*(\\w+).*", token);
   if (!result || token.size() != 1) {
+    result = false;
     goto done;
   }
   keyword = token.front();
@@ -123,8 +129,8 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
       goto done;
     }
     ExecuteCreateTableCommand(create_command);
-    UpdateTableInfo("tinybase_tables");
-    UpdateTableInfo("tinybase_columns");
+    UpdateTableInfo(root_schema_tables.table_name);
+    UpdateTableInfo(root_schema_columns.table_name);
   } else if (keyword == "INSERT") {
     result = ParseInsertIntoCommand(sql_command, insert_command);
     if (!result) {
@@ -177,11 +183,12 @@ bool DatabaseEngine::ParseCreateTableCommand(const std::string& sql_command,
   std::vector<std::string> columns;
 
   // extract table name and remaining
-  result =
-      ExtractStr(sql_command,
-                 "\\s*CREATE\\s*TABLE\\s*(\\w+)\\s*\\((.+)(?=\\))\\s*", token);
+  result = ExtractStr(sql_command, "\\s*CREATE\\s*TABLE\\s*" + regex_for_name +
+                                       "\\s*\\((.+)(?=\\))\\s*",
+                      token);
 
   if (!result || token.size() != 2) {
+    result = false;
     goto done;
   }
 
@@ -191,13 +198,16 @@ bool DatabaseEngine::ParseCreateTableCommand(const std::string& sql_command,
   temp = token.at(1);
   SplitStr(temp, ',', token);
   if (!token.size()) {
+    result = false;
     goto done;
   }
 
   // first column must be primary key
-  result = ExtractStr(token.front(), "\\s*(\\w+)\\s*INT\\s*PRIMARY\\s*KEY\\s*",
+  result = ExtractStr(token.front(),
+                      "\\s*" + regex_for_name + "\\s*INT\\s*PRIMARY\\s*KEY\\s*",
                       columns);
   if (!result || columns.size() != 1) {
+    result = false;
     goto done;
   }
 
@@ -207,13 +217,17 @@ bool DatabaseEngine::ParseCreateTableCommand(const std::string& sql_command,
   // remaining column
   for (auto i = 1; i < token.size(); i++) {
     // first try with NOT NULL
-    result = ExtractStr(token.at(i), "\\s*(\\w+)\\s*(\\w+)\\s*NOT\\s*NULL\\s*",
+    result = ExtractStr(token.at(i), "\\s*" + regex_for_name + "\\s*" +
+                                         regex_for_type + "\\s*NOT\\s*NULL\\s*",
                         columns);
 
     if (!result || columns.size() != 2) {
       // second try
-      result = ExtractStr(token.at(i), "\\s*(\\w+)\\s*(\\w+)\\s*", columns);
+      result = ExtractStr(
+          token.at(i),
+          "\\s*" + regex_for_name + "\\s*" + regex_for_type + "\\s*", columns);
       if (!result || columns.size() != 2) {
+        result = false;
         goto done;
       } else {
         is_nullable = true;
@@ -225,6 +239,7 @@ bool DatabaseEngine::ParseCreateTableCommand(const std::string& sql_command,
     // check type
     type = StringToSchemaDataType(columns.at(1));
     if (type == InvalidType) {
+      result = false;
       goto done;
     }
 
@@ -243,63 +258,57 @@ bool DatabaseEngine::ParseInsertIntoCommand(const std::string& sql_command,
   std::string temp;
   TypeCode type_code;
   Value sql_value;
-  fs::path file_path;
+  CreateTableColumn column_info;
   internal::TableManager* table(nullptr);
   std::vector<std::string> token;
   std::vector<std::string> values;
 
   // Extract table name and remaining
-  result = ExtractStr(
-      sql_command,
-      "\\s*INSERT\\s*INTO\\s*TABLE\\s*(\\w+)\\s*VALUES\\s*\\((.+?)\\)\\s*",
-      token);
+  result = ExtractStr(sql_command,
+                      "\\s*INSERT\\s*INTO\\s*TABLE\\s*" + regex_for_name +
+                          "\\s*"
+                          "VALUES\\s*\\((.+?)\\)\\s*",
+                      token);
   if (!result || token.size() != 2) {
+    result = false;
     goto done;
   }
 
   // try to load table from memory
   command.table_name = token.front();
-  if (database_tables_.find(command.table_name) == database_tables_.end()) {
-    // check file
-    file_path = "data/" + command.table_name + ".tbl";
-    if (fs::exists(file_path)) {
-      table = LoadTable(command.table_name);
-    } else {
-      goto done;
-    }
-  } else {
-    table = &(database_tables_.at(command.table_name));
+  table = TryLoadTable(command.table_name);
+  if (!table) {
+    result = false;
+    goto done;
   }
 
   temp = token.at(1);
   // split remaining by comma
   SplitStr(temp, ',', token);
   if (!token.size()) {
+    result = false;
     goto done;
   }
 
-  // check value
+  // check value list
   for (auto i = 0; i < token.size(); i++) {
-    // string type
-    if (table->GetColumnType(i) == Text) {
-      auto str_begin(token.at(i).find_first_of('\''));
-      auto str_end(token.at(i).find_last_of('\''));
-      if (str_begin == std::string::npos || str_end == std::string::npos) {
-        goto done;
-      }
-      values.clear();
-      values.push_back(
-          token.at(i).substr(str_begin + 1, str_end - str_begin - 1));
-    } else {
-      result = ExtractStr(token.at(i), "\\s*([\\w-_:\\.]+)\\s*", values);
-      if (!result || values.size() != 1) {
-        goto done;
-      }
+    column_info = table->GetColumnInfo(i);
+    result = ParseValue(token.at(i), column_info.type, values);
+    if (!result) {
+      goto done;
     }
 
-    type_code = DataTypeToTypeCode(table->GetColumnType(i), values.front());
+    type_code = DataTypeToTypeCode(column_info.type, values.front());
     command.type_list.push_back(type_code);
     sql_value = StringToValue(values.front(), type_code);
+
+    if (IsNotNullViolate(type_code, column_info.attribute)) {
+      std::cerr
+          << "Insertion aborted because Not Null violation found for column "
+          << column_info.column_name << std::endl;
+      result = false;
+      goto done;
+    }
     command.value_list.push_back(sql_value);
   }
 
@@ -317,20 +326,23 @@ bool DatabaseEngine::ParseSelectFromCommand(const std::string& sql_command,
   TypeCode type_code;
   Value sql_value;
   WhereClause clause;
+  CreateTableColumn column_info;
   std::vector<std::string> condition_str;
   std::vector<std::string> token;
   std::vector<std::string> columns;
   internal::TableManager* table(nullptr);
 
   // separate them
-  result = ExtractStr(sql_command,
-                      "\\s*SELECT\\s*(.*?)\\s*FROM\\s*(\\w+)\\s*WHERE\\s*(\\w+)"
-                      "\\s*([>=<]{1,2})(.+)",
+  result = ExtractStr(sql_command, "\\s*SELECT\\s*(.*?)\\s*FROM\\s*" +
+                                       regex_for_name + "\\s*WHERE\\s*" +
+                                       regex_for_name + "\\s*([>=<]{1,2})(.+)",
                       token);
   if (!result || token.size() != 5) {
-    result = ExtractStr(sql_command,
-                        "\\s*SELECT\\s*(.*?)\\s*FROM\\s*(\\w+)\\s*", token);
+    result = ExtractStr(
+        sql_command,
+        "\\s*SELECT\\s*(.*?)\\s*FROM\\s*" + regex_for_name + "\\s*", token);
     if (!result || token.size() != 2) {
+      result = false;
       goto done;
     } else {
       with_where = false;
@@ -341,48 +353,38 @@ bool DatabaseEngine::ParseSelectFromCommand(const std::string& sql_command,
 
   // check table name
   command.table_name = token.at(1);
-  if (database_tables_.find(command.table_name) == database_tables_.end()) {
-    // check file
-    file_path = "data/" + command.table_name + ".tbl";
-    if (fs::exists(file_path)) {
-      table = LoadTable(command.table_name);
-    } else {
-      goto done;
-    }
-  } else {
-    table = &(database_tables_.at(command.table_name));
+  table = TryLoadTable(command.table_name);
+  if (!table) {
+    result = false;
+    goto done;
   }
 
   if (with_where) {
     // check column name
     if (!table->IsColumnValid(token.at(2))) {
+      result = false;
       goto done;
     }
 
     // check operator type
     op = StringToOperator(token.at(3));
     if (op == InvalidOp) {
+      result = false;
       goto done;
     }
 
-    if (table->GetColumnType(token.at(2)) == Text) {
-      auto str_begin(token.at(4).find_first_of('\''));
-      auto str_end(token.at(4).find_last_of('\''));
-      if (str_begin == std::string::npos || str_end == std::string::npos) {
-        goto done;
-      }
-      condition_str.push_back(
-          token.at(4).substr(str_begin + 1, str_end - str_begin - 1));
-    } else {
-      result = ExtractStr(token.at(4), "\\s*([\\w-_\\.]+)\\s*", condition_str);
-      if (!result || condition_str.size() != 1) {
-        goto done;
-      }
+    result = table->GetColumnInfo(token.at(2), column_info);
+    if (!result) {
+      goto done;
+    }
+
+    result = ParseValue(token.at(4), column_info.type, condition_str);
+    if (!result) {
+      goto done;
     }
 
     // convert value
-    type_code = DataTypeToTypeCode(table->GetColumnType(token.at(2)),
-                                   condition_str.front());
+    type_code = DataTypeToTypeCode(column_info.type, condition_str.front());
     sql_value = StringToValue(condition_str.front(), type_code);
 
     // save whole where clause
@@ -399,9 +401,11 @@ bool DatabaseEngine::ParseSelectFromCommand(const std::string& sql_command,
     command.column_name.push_back(token.front());
   } else {
     for (auto i = 0; i < token.size(); i++) {
-      result = ExtractStr(token.at(i), "\\s*(\\w+)\\s*", columns);
+      result =
+          ExtractStr(token.at(i), "\\s*" + regex_for_name + "\\s*", columns);
       if (!result || columns.size() != 1 ||
           !table->IsColumnValid(columns.at(0))) {
+        result = false;
         goto done;
       }
 
@@ -424,60 +428,49 @@ bool DatabaseEngine::ParseUpdateSetCommand(const std::string& sql_command,
                                            UpdateSetCommand& command) {
   bool result(false);
   std::string temp;
-  fs::path file_path;
   TypeCode type_code;
   Value sql_value;
+  CreateTableColumn column_info;
   std::vector<std::string> condition_str;
   std::vector<std::string> token;
   std::vector<std::string> set_clause;
   internal::TableManager* table(nullptr);
 
-  result = ExtractStr(sql_command,
-                      "\\s*UPDATE\\s*([\\.\\w_-]+)\\s*SET\\s*(.+)\\s*WHERE\\s*("
-                      "[\\.\\w_-]+)\\s*=(.+)",
+  result = ExtractStr(sql_command, "\\s*UPDATE\\s*" + regex_for_name +
+                                       "\\s*SET\\s*(.+)\\s*WHERE\\s*" +
+                                       regex_for_name + "\\s*=(.+)",
                       token);
   if (!result || token.size() != 4) {
+    result = false;
     goto done;
   }
 
   // check table name
   command.table_name = token.front();
-  if (database_tables_.find(command.table_name) == database_tables_.end()) {
-    // check file
-    file_path = "data/" + command.table_name + ".tbl";
-    if (fs::exists(file_path)) {
-      table = LoadTable(command.table_name);
-    } else {
-      goto done;
-    }
-  } else {
-    table = &(database_tables_.at(command.table_name));
+  table = TryLoadTable(command.table_name);
+  if (!table) {
+    result = false;
+    goto done;
   }
 
   // check column name
   if (!table->IsColumnValid(token.at(2))) {
+    result = false;
     goto done;
   }
 
-  if (table->GetColumnType(token.at(2)) == Text) {
-    auto str_begin(token.at(3).find_first_of('\''));
-    auto str_end(token.at(3).find_last_of('\''));
-    if (str_begin == std::string::npos || str_end == std::string::npos) {
-      goto done;
-    }
-    condition_str.clear();
-    condition_str.push_back(
-        token.at(3).substr(str_begin + 1, str_end - str_begin - 1));
-  } else {
-    result = ExtractStr(token.at(3), "\\s*([\\w-_\\.]+)\\s*", condition_str);
-    if (!result || condition_str.size() != 1) {
-      goto done;
-    }
+  result = table->GetColumnInfo(token.at(2), column_info);
+  if (!result) {
+    goto done;
+  }
+
+  result = ParseValue(token.at(3), column_info.type, condition_str);
+  if (!result) {
+    goto done;
   }
 
   // convert value
-  type_code = DataTypeToTypeCode(table->GetColumnType(token.at(2)),
-                                 condition_str.front());
+  type_code = DataTypeToTypeCode(column_info.type, condition_str.front());
   sql_value = StringToValue(condition_str.front(), type_code);
 
   // save whole where clause
@@ -489,34 +482,37 @@ bool DatabaseEngine::ParseUpdateSetCommand(const std::string& sql_command,
 
   // set clause
   for (auto i = 0; i < token.size(); i++) {
-    result = ExtractStr(token.at(i), "\\s*([\\.\\w_-]+)\\s*=(.+)", set_clause);
+    result = ExtractStr(token.at(i), "\\s*" + regex_for_name + "\\s*=(.+)",
+                        set_clause);
     if (!result || set_clause.size() != 2 ||
         !table->IsColumnValid(set_clause.front())) {
+      result = false;
       goto done;
     }
 
-    // first try string
-    if (table->GetColumnType(set_clause.at(0)) == Text) {
-      auto str_begin(set_clause.at(1).find_first_of('\''));
-      auto str_end(set_clause.at(1).find_last_of('\''));
-      if (str_begin == std::string::npos || str_end == std::string::npos) {
-        goto done;
-      }
-      condition_str.clear();
-      condition_str.push_back(
-          set_clause.at(1).substr(str_begin + 1, str_end - str_begin - 1));
-    } else {
-      result =
-          ExtractStr(set_clause.at(1), "\\s*([\\w-_\\.]+)\\s*", condition_str);
-      if (!result || condition_str.size() != 1) {
-        goto done;
-      }
+    // get type
+    result = table->GetColumnInfo(set_clause.front(), column_info);
+    if (!result) {
+      result = false;
+      goto done;
+    }
+
+    // parse value
+    result = ParseValue(set_clause.at(1), column_info.type, condition_str);
+    if (!result) {
+      goto done;
     }
 
     // convert value
-    type_code = DataTypeToTypeCode(table->GetColumnType(set_clause.front()),
-                                   condition_str.front());
+    type_code = DataTypeToTypeCode(column_info.type, condition_str.front());
     sql_value = StringToValue(condition_str.front(), type_code);
+
+    if (IsNotNullViolate(type_code, column_info.attribute)) {
+      std::cerr << "Update aborted because Not Null violation found for column "
+                << column_info.column_name << std::endl;
+      result = false;
+      goto done;
+    }
 
     command.set_list.push_back({set_clause.front(), type_code, sql_value});
   }
@@ -530,16 +526,17 @@ bool DatabaseEngine::ParseDropTableCommand(const std::string& sql_command,
   bool result(false);
   std::vector<std::string> token;
 
-  result =
-      ExtractStr(sql_command, "\\s*DROP\\s*TABLE\\s*([\\.\\w_-]+)\\s*", token);
+  result = ExtractStr(sql_command,
+                      "\\s*DROP\\s*TABLE\\s*" + regex_for_name + "\\s*", token);
   if (!result || token.size() != 1) {
+    result = false;
     goto done;
   }
 
   // check table
   command.table_name = token.front();
   if ((database_tables_.find(command.table_name) == database_tables_.end()) &&
-      !fs::exists("data/" + command.table_name + ".tbl")) {
+      !fs::exists(FILE_PATH(command.table_name))) {
     result = false;
   }
 
@@ -547,18 +544,45 @@ done:
   return result;
 }
 
+bool DatabaseEngine::ParseValue(const std::string& value_str,
+                                const SchemaDataType& type,
+                                std::vector<std::string>& values) {
+  bool result(false);
+
+  if (Text == type) {
+    values.resize(1);
+    return ExtractStrInQuotation(value_str, values.front());
+  } else if (Date == type || DateTime == type) {
+    values.resize(1);
+    if (ExtractStrInQuotation(value_str, values.front())) {
+      return true;
+    }
+  }
+
+  result = ExtractStr(value_str, "\\s*" + regex_for_value + "\\s*", values);
+  if (!result || values.size() != 1) {
+    result = false;
+  }
+  return result;
+}
+
+bool DatabaseEngine::IsNotNullViolate(const TypeCode& type_code,
+                                      const ColumnAttribute& attr) {
+  return (IsTypeCodeNull(type_code) &&
+          (not_null == attr || primary_key == attr));
+}
+
 bool DatabaseEngine::ExecuteCreateTableCommand(
     const CreateTableCommand& command) {
   bool result(false);
-  std::string file_name = "data/" + command.table_name + ".tbl";
-  fs::path file_path(file_name);
 
-  if (fs::exists(file_path)) {
+  if (fs::exists(FILE_PATH(command.table_name))) {
     return false;
   }
 
-  auto res = database_tables_.emplace(command.table_name,
-                                      internal::TableManager(file_path));
+  auto res = database_tables_.emplace(
+      command.table_name,
+      internal::TableManager(FILE_PATH(command.table_name)));
   res.first->second.CreateTable(command);
 
   RegisterTable(command);
@@ -580,7 +604,8 @@ void DatabaseEngine::ExecuteSelectFromCommand(
 }
 
 void DatabaseEngine::ExecuteShowTablesCommand(void) {
-  SelectFromCommand show_tables = {"tinybase_tables", {"table_name"}};
+  SelectFromCommand show_tables = {root_schema_tables.table_name,
+                                   {"table_name"}};
   ExecuteSelectFromCommand(show_tables);
 }
 
@@ -592,7 +617,7 @@ void DatabaseEngine::ExecuteUpdateSetCommand(const UpdateSetCommand& command) {
 void DatabaseEngine::ExecuteDropTableCommand(const DropTableCommand& command) {
   ClearTableInfo(root_schema_tables.table_name, command.table_name);
   ClearTableInfo(root_schema_columns.table_name, command.table_name);
-  fs::remove("data/" + command.table_name + ".tbl");
+  fs::remove(FILE_PATH(command.table_name));
 }
 
 void DatabaseEngine::SplitStr(const std::string& target_str, const char delimit,
@@ -692,8 +717,10 @@ void DatabaseEngine::ClearTableInfo(const std::string& target_table,
 void DatabaseEngine::RegisterTable(const CreateTableCommand& table_schema) {
   InsertIntoCommand insert_tables;
   InsertIntoCommand insert_columns;
-  SelectFromCommand query_tables_rowid = {"tinybase_tables", {"table_name"}};
-  SelectFromCommand query_columns_rowid = {"tinybase_columns", {"table_name"}};
+  SelectFromCommand query_tables_rowid = {root_schema_tables.table_name,
+                                          {"table_name"}};
+  SelectFromCommand query_columns_rowid = {root_schema_columns.table_name,
+                                           {"table_name"}};
 
   // row id
   auto res = database_tables_.at(query_tables_rowid.table_name)
@@ -706,7 +733,7 @@ void DatabaseEngine::RegisterTable(const CreateTableCommand& table_schema) {
 
   // tables
   insert_tables = {
-      "tinybase_tables",
+      root_schema_tables.table_name,
       {Int, static_cast<TypeCode>(Text + table_schema.table_name.size()), Int,
        Int},
       {++tables_row_id, table_schema.table_name, static_cast<int32_t>(0),
@@ -725,7 +752,7 @@ void DatabaseEngine::RegisterTable(const CreateTableCommand& table_schema) {
     data_type = DataTypeToString(table_schema.column_list.at(i).type);
     column_key = IsAttributePrimary(table_schema.column_list.at(i).attribute);
     is_nullable = IsAttributeNullable(table_schema.column_list.at(i).attribute);
-    insert_columns = {"tinybase_columns",
+    insert_columns = {root_schema_columns.table_name,
                       {Int, static_cast<TypeCode>(Text + table_name.size()),
                        static_cast<TypeCode>(Text + column_name.size()),
                        static_cast<TypeCode>(Text + data_type.size()), TinyInt,
@@ -743,9 +770,8 @@ internal::TableManager* DatabaseEngine::LoadTable(
   sql::CreateTableCommand table_schema = LoadSchema(table_name);
 
   // load table
-  fs::path file_path = "data/" + table_name + ".tbl";
-  auto res =
-      database_tables_.emplace(table_name, internal::TableManager(file_path));
+  auto res = database_tables_.emplace(
+      table_name, internal::TableManager(FILE_PATH(table_name)));
   res.first->second.Load(table_schema, table_info.first, table_info.second);
 
   return &(res.first->second);
@@ -761,11 +787,11 @@ const std::pair<int32_t, int32_t> DatabaseEngine::LoadTableInfo(
       "table_name", Equal, static_cast<TypeCode>(Text + table_name.size()),
       table_name};
   SelectFromCommand query_tables_info = {
-      "tinybase_tables",
+      root_schema_tables.table_name,
       {"*"},
       std::experimental::make_optional(where_condition)};
 
-  tables_query_result = database_tables_.at("tinybase_tables")
+  tables_query_result = database_tables_.at(root_schema_tables.table_name)
                             .InternalSelectFrom(query_tables_info);
 
   // fanout
@@ -788,11 +814,11 @@ const CreateTableCommand DatabaseEngine::LoadSchema(
       "table_name", Equal, static_cast<TypeCode>(Text + table_name.size()),
       table_name};
   SelectFromCommand query_columns_schema = {
-      "tinybase_columns",
+      root_schema_columns.table_name,
       {"*"},
       std::experimental::make_optional(where_condition)};
 
-  columns_query_result = database_tables_.at("tinybase_columns")
+  columns_query_result = database_tables_.at(root_schema_columns.table_name)
                              .InternalSelectFrom(query_columns_schema);
 
   // form schema
@@ -822,11 +848,11 @@ const TableInfo DatabaseEngine::LoadRootTableInfo(
     const std::string& table_name) {
   int32_t root_page(0);
   int32_t fanout(0);
-  std::ifstream infile("data/.table_info");
+  std::ifstream infile(hidden_file);
 
-  if (table_name == "tinybase_tables") {
+  if (table_name == root_schema_tables.table_name) {
     infile >> root_page >> fanout;
-  } else if (table_name == "tinybase_columns") {
+  } else if (table_name == root_schema_columns.table_name) {
     infile.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
     infile >> root_page >> fanout;
   }
@@ -854,12 +880,12 @@ void DatabaseEngine::UpdateTableInfo(const std::string& table_name) {
       table_name};
 
   SelectFromCommand query_rowid = {
-      "tinybase_tables",
+      root_schema_tables.table_name,
       {"row_id"},
       std::experimental::make_optional(where_condition)};
 
-  tables_query_result =
-      database_tables_.at("tinybase_tables").InternalSelectFrom(query_rowid);
+  tables_query_result = database_tables_.at(root_schema_tables.table_name)
+                            .InternalSelectFrom(query_rowid);
 
   int32_t row_id =
       expr::any_cast<int32_t>(tables_query_result.front().front().second);
@@ -867,11 +893,11 @@ void DatabaseEngine::UpdateTableInfo(const std::string& table_name) {
   // update info
   where_condition = {"row_id", Equal, Int, row_id};
   UpdateSetCommand update_command = {
-      "tinybase_tables",
+      root_schema_tables.table_name,
       {{"root_page", Int, root_page}, {"fanout", Int, fanout}},
       where_condition};
 
-  database_tables_.at("tinybase_tables").UpdateSet(update_command);
+  database_tables_.at(root_schema_tables.table_name).UpdateSet(update_command);
 }
 
 void DatabaseEngine::SaveRootTableInfo(void) {
@@ -879,17 +905,46 @@ void DatabaseEngine::SaveRootTableInfo(void) {
   int32_t fanout;
 
   // overwrite existed one
-  std::ofstream outfile("data/.table_info");
+  std::ofstream outfile(hidden_file);
 
-  root_page = database_tables_.at("tinybase_tables").GetRootPage();
-  fanout = database_tables_.at("tinybase_tables").GetFanout();
+  root_page = database_tables_.at(root_schema_tables.table_name).GetRootPage();
+  fanout = database_tables_.at(root_schema_tables.table_name).GetFanout();
   outfile << root_page << " " << fanout << "\n";
 
-  root_page = database_tables_.at("tinybase_columns").GetRootPage();
-  fanout = database_tables_.at("tinybase_columns").GetFanout();
+  root_page = database_tables_.at(root_schema_columns.table_name).GetRootPage();
+  fanout = database_tables_.at(root_schema_columns.table_name).GetFanout();
   outfile << root_page << " " << fanout << "\n";
 
   outfile.close();
+}
+
+const bool DatabaseEngine::ExtractStrInQuotation(const std::string& target,
+                                                 std::string& result_str) {
+  auto str_begin(target.find_first_of('\''));
+  auto str_end(target.find_last_of('\''));
+
+  if (str_begin == std::string::npos || str_end == std::string::npos) {
+    return false;
+  }
+
+  result_str = target.substr(str_begin + 1, str_end - str_begin - 1);
+  return true;
+}
+
+internal::TableManager* DatabaseEngine::TryLoadTable(
+    const std::string& table_name) {
+  internal::TableManager* handler(nullptr);
+
+  if (database_tables_.find(table_name) == database_tables_.end()) {
+    // check file
+    if (fs::exists(FILE_PATH(table_name))) {
+      handler = LoadTable(table_name);
+    }
+  } else {
+    handler = &(database_tables_.at(table_name));
+  }
+
+  return handler;
 }
 
 }  // namespace sql
