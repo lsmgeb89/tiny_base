@@ -246,6 +246,10 @@ void PageManager::Reorder(void) {
   for (auto cell_pair : cell_list) {
     InsertCell(cell_pair.first, cell_pair.second);
   }
+
+  if (!cell_list.size()) {
+    UpdateInfo();
+  }
 }
 
 bool PageManager::FindCell(const CellKey& key, PageCell& cell) const {
