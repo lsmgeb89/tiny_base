@@ -62,26 +62,38 @@ void DatabaseEngine::Run(void) {
   bool exit(false);
   std::string line;
   std::string user_input;
-  std::vector<std::string> command_array;
+  std::string sql_command;
+  std::vector<std::string> res;
 
   do {
     std::cout << "tinysql> " << std::flush;
 
-    user_input.clear();
     while (std::getline(std::cin, line) && !line.empty()) {
-      user_input += " ";
-      user_input += line;
-    }
-
-    SplitStr(user_input, ';', command_array);
-
-    for (auto command : command_array) {
-      exit = Execute(command);
-      if (exit) {
-        break;
+      if (!user_input.empty()) {
+        user_input += " ";
       }
-    }
+      user_input += line;
 
+      auto size = user_input.find_first_of(';');
+
+      // find a semicolon
+      if (size != std::string::npos) {
+        sql_command = user_input.substr(0, size);
+        user_input.erase(0, size + 1);
+        if (!ExtractStr(user_input, "^\\s*$", res)) {
+          std::cout << std::endl;
+        }
+        exit = Execute(sql_command);
+        if (exit) {
+          break;
+        }
+        if (ExtractStr(user_input, "^\\s*$", res)) {
+          std::cout << "tinysql> " << std::flush;
+        } else {
+          std::cout << "      -> " << std::flush;
+        }
+      }
+    }  // getline loop
   } while (!exit);
 }
 
