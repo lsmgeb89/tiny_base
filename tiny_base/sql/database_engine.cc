@@ -103,7 +103,13 @@ void DatabaseEngine::Run(const std::string file_path) {
         if (!ExtractStr(user_input, "^\\s*$", res)) {
           std::cout << std::endl;
         }
-        exit = Execute(sql_command);
+
+        try {
+          exit = Execute(sql_command);
+        } catch (...) {
+          std::cerr << "Internal error!" << std::endl;
+        }
+
         if (exit) {
           break;
         }
@@ -190,6 +196,9 @@ bool DatabaseEngine::Execute(const std::string& sql_command) {
   }
 
 done:
+  if (!result) {
+    std::cerr << "Syntax error!" << std::endl;
+  }
   return exit;
 }
 
