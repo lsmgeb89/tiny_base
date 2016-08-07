@@ -104,6 +104,10 @@ void DatabaseEngine::Run(const std::string file_path) {
           std::cout << std::endl;
         }
 
+        if (file_mode) {
+          std::cout << "tinysql> " << sql_command << std::endl;
+        }
+
         try {
           exit = Execute(sql_command);
         } catch (...) {
@@ -113,6 +117,7 @@ void DatabaseEngine::Run(const std::string file_path) {
         if (exit) {
           break;
         }
+
         if (!file_mode) {
           if (ExtractStr(user_input, "^\\s*$", res)) {
             std::cout << "tinysql> " << std::flush;
@@ -122,7 +127,7 @@ void DatabaseEngine::Run(const std::string file_path) {
         }
       }
     }  // getline loop
-  } while (!exit);
+  } while (!(exit || (file_mode && sql_file.eof())));
 
   if (file_mode) {
     sql_file.close();

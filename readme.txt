@@ -17,3 +17,10 @@ Compile Steps by CMake (https://cmake.org/):
    (eg: cmake ../src -DCMAKE_BUILD_TYPE=MINSIZEREL)
 4. make
 
+How to run:
+You can run tiny_base in two modes.
+1. interactive command mode: just start the program
+   (eg: ./tiny_base)
+2. sql script mode: start the program with a path of a sql file
+   (eg: ./tiny_base test.sql)
+
