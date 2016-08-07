@@ -105,12 +105,12 @@ static const Value BytesToValue(const TypeCode& type_code,
       to_value = value_double;
     } break;
     case DateTime: {
-      uint64_t value_date_time;
+      int64_t value_date_time;
       std::memcpy(&value_date_time, bytes.data(), sizeof(value_date_time));
       to_value = value_date_time;
     } break;
     case Date: {
-      uint64_t value_date;
+      int64_t value_date;
       std::memcpy(&value_date, bytes.data(), sizeof(value_date));
       to_value = value_date;
     } break;
@@ -164,11 +164,11 @@ static void ValueToBytes(const TypeCode& type_code, const Value& value,
       std::memcpy(bytes.data(), &value_double, size);
     } break;
     case DateTime: {
-      uint64_t value_date_time = expr::any_cast<uint64_t>(value);
+      int64_t value_date_time = expr::any_cast<int64_t>(value);
       std::memcpy(bytes.data(), &value_date_time, size);
     } break;
     case Date: {
-      uint64_t value_date = expr::any_cast<uint64_t>(value);
+      int64_t value_date = expr::any_cast<int64_t>(value);
       std::memcpy(bytes.data(), &value_date, size);
     } break;
     default:
@@ -224,19 +224,19 @@ static const std::string BytesToString(const TypeCode& type_code,
       res_str = std::to_string(value_double);
     } break;
     case DateTime: {
-      uint64_t value_date_time;
+      int64_t value_date_time;
       std::memcpy(&value_date_time, bytes.data(), sizeof(value_date_time));
       std::time_t date_time(value_date_time);
       std::stringstream str_stream;
-      str_stream << std::put_time(std::gmtime(&date_time), "%F_%T");
+      str_stream << std::put_time(std::localtime(&date_time), "%F_%T");
       res_str = str_stream.str();
     } break;
     case Date: {
-      uint64_t value_date;
+      int64_t value_date;
       std::memcpy(&value_date, bytes.data(), sizeof(value_date));
       std::time_t date(value_date);
       std::stringstream str_stream;
-      str_stream << std::put_time(std::gmtime(&date), "%F");
+      str_stream << std::put_time(std::localtime(&date), "%F");
       res_str = str_stream.str();
     } break;
     default:
@@ -354,15 +354,15 @@ static const bool CompareValue(const Value& lhs, const Value& rhs,
       result = Compare(lhs_value_double, rhs_value_double, operator_type);
     } break;
     case DateTime: {
-      uint64_t lhs_value_date_time = expr::any_cast<uint64_t>(lhs);
-      uint64_t rhs_value_date_time = expr::any_cast<uint64_t>(rhs);
+      int64_t lhs_value_date_time = expr::any_cast<int64_t>(lhs);
+      int64_t rhs_value_date_time = expr::any_cast<int64_t>(rhs);
       std::time_t lhs_date_time(lhs_value_date_time);
       std::time_t rhs_date_time(rhs_value_date_time);
       result = Compare(lhs_date_time, rhs_date_time, operator_type);
     } break;
     case Date: {
-      uint64_t lhs_value_date = expr::any_cast<uint64_t>(lhs);
-      uint64_t rhs_value_date = expr::any_cast<uint64_t>(rhs);
+      int64_t lhs_value_date = expr::any_cast<int64_t>(lhs);
+      int64_t rhs_value_date = expr::any_cast<int64_t>(rhs);
       std::time_t lhs_date(lhs_value_date);
       std::time_t rhs_date(rhs_value_date);
       result = Compare(lhs_date, rhs_date, operator_type);
@@ -508,15 +508,17 @@ static const Value StringToValue(const std::string& value_str,
       std::tm tm{};
       std::istringstream str_stream(value_str);
       str_stream >> std::get_time(&tm, "%Y-%m-%d_%T");
+      tm.tm_isdst = -1;
       std::time_t time = std::mktime(&tm);
-      sql_value = static_cast<uint64_t>(time);
+      sql_value = static_cast<int64_t>(time);
     } break;
     case Date: {
       std::tm tm{};
       std::istringstream str_stream(value_str);
       str_stream >> std::get_time(&tm, "%Y-%m-%d");
+      tm.tm_isdst = -1;
       std::time_t time = std::mktime(&tm);
-      sql_value = static_cast<uint64_t>(time);
+      sql_value = static_cast<int64_t>(time);
     } break;
     default:
       break;

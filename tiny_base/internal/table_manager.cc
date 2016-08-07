@@ -167,16 +167,16 @@ PageCell TableManager::PrepareLeafCell(const sql::InsertIntoCommand& command) {
         std::memcpy(table_leaf_cell.data() + offset, &value_double, type_size);
       } break;
       case sql::DateTime: {
-        uint64_t value_date_time =
-            sql::expr::any_cast<uint64_t>(command.value_list.at(i));
+        int64_t value_date_time =
+            sql::expr::any_cast<int64_t>(command.value_list.at(i));
         value_date_time =
             utils::SwapEndian<decltype(value_date_time)>(value_date_time);
         std::memcpy(table_leaf_cell.data() + offset, &value_date_time,
                     type_size);
       } break;
       case sql::Date: {
-        uint64_t value_date =
-            sql::expr::any_cast<uint64_t>(command.value_list.at(i));
+        int64_t value_date =
+            sql::expr::any_cast<int64_t>(command.value_list.at(i));
         value_date = utils::SwapEndian<decltype(value_date)>(value_date);
         std::memcpy(table_leaf_cell.data() + offset, &value_date, type_size);
       } break;
