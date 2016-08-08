@@ -263,7 +263,6 @@ void TableManager::InsertCell(const PageIndex& target_page,
   } else {
     if (!IsLeaf(target_page)) {
       const CellIndex bound(GetLowerBound(target_page, primary_key));
-      assert(right_most_pointer);
       if (bound == GetCellNum(target_page)) {
         SetRightMostPointer(target_page, *right_most_pointer);
       } else {
@@ -291,8 +290,10 @@ PageIndex TableManager::SearchPage(const PageIndex& current_page,
     return SearchPage(page_list_[current_page].GetLeftMostPagePointer(),
                       primary_key);
   } else if (primary_key >= key_range.first && primary_key < key_range.second) {
-    return GetCellLeftPointer(current_page,
-                              GetLowerBound(current_page, primary_key));
+    return SearchPage(
+        GetCellLeftPointer(current_page,
+                           GetLowerBound(current_page, primary_key)),
+        primary_key);
   } else if (primary_key >= key_range.second) {
     return SearchPage(page_list_[current_page].GetRightMostPagePointer(),
                       primary_key);
